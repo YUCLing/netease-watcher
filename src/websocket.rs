@@ -21,35 +21,7 @@ async fn handle_socket(mut socket: WebSocket, current_time: Arc<Mutex<f64>>, mus
 
     let msg_queue_cln = Arc::clone(&msg_queue);
     let send_task = tokio::spawn(async move {
-        let mut last_music = None;
-        let mut last_val = -1.0;
         'outer: loop {
-            if let Ok(val) = current_time.try_lock() {
-                let val = val.clone();
-                if val != last_val {
-                    if socket.send(Message::Text(serde_json::json!({
-                        "type": "timechange",
-                        "value": val
-                    }).to_string())).await.is_err() {
-                        break;
-                    }
-                    last_val = val;
-                }
-            }
-
-            if let Ok(val) = music.try_lock() {
-                let val = val.clone();
-                if val != last_music {
-                    if socket.send(Message::Text(serde_json::json!({
-                        "type": "musicchange",
-                        "value": val
-                    }).to_string())).await.is_err() {
-                        break;
-                    }
-                    last_music = val;
-                }
-            }
-
             if let Ok(mut queue) = msg_queue_cln.try_lock() {
                 while let Some(msg) = queue.pop() {
                     if socket.send(msg).await.is_err() {
@@ -60,7 +32,48 @@ async fn handle_socket(mut socket: WebSocket, current_time: Arc<Mutex<f64>>, mus
         }
     });
 
-    let _ = send_task.await;
+    let msg_queue_cln = Arc::clone(&msg_queue);
+    let mut current_time_task = tokio::task::spawn_blocking(move || {
+        let mut last_val = -1.0;
+        loop {
+            let val = current_time.blocking_lock().clone();
+            if val != last_val {
+                msg_queue_cln.blocking_lock().push(Message::Text(serde_json::json!({
+                    "type": "timechange",
+                    "value": val
+                }).to_string()));
+                last_val = val;
+            }
+        }
+    });
 
+    let msg_queue_cln = Arc::clone(&msg_queue);
+    let mut music_change_task = tokio::task::spawn_blocking(move || {
+        let mut last_val = None;
+        loop {
+            let val = music.blocking_lock().clone();
+            if val != last_val {
+                msg_queue_cln.blocking_lock().push(Message::Text(serde_json::json!({
+                    "type": "musicchange",
+                    "value": val
+                }).to_string()));
+                last_val = val;
+            }
+        }
+    });
+
+    tokio::select! {
+        _ = send_task => {
+            current_time_task.abort();
+            music_change_task.abort();
+        },
+        _ = (&mut current_time_task) => {
+
+        },
+        _ = (&mut music_change_task) => {
+
+        }
+    };
+    
     println!("Websocket disconnected.");
 }
