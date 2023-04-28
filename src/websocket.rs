@@ -17,19 +17,24 @@ pub async fn ws_handler(
 }
 
 async fn handle_socket(mut socket: WebSocket, current_time: Arc<Mutex<f64>>, music: Arc<Mutex<Option<Music>>>) {
+    let msg_queue: Arc<Mutex<Vec<Message>>> = Arc::new(Mutex::new(vec![]));
+
+    let msg_queue_cln = Arc::clone(&msg_queue);
     let send_task = tokio::spawn(async move {
         let mut last_music = None;
         let mut last_val = -1.0;
-        loop {
-            let val = current_time.lock().await.clone();
-            if val != last_val {
-                if socket.send(Message::Text(serde_json::json!({
-                    "type": "timechange",
-                    "value": val
-                }).to_string())).await.is_err() {
-                    break;
+        'outer: loop {
+            if let Ok(val) = current_time.try_lock() {
+                let val = val.clone();
+                if val != last_val {
+                    if socket.send(Message::Text(serde_json::json!({
+                        "type": "timechange",
+                        "value": val
+                    }).to_string())).await.is_err() {
+                        break;
+                    }
+                    last_val = val;
                 }
-                last_val = val;
             }
 
             if let Ok(val) = music.try_lock() {
@@ -42,6 +47,14 @@ async fn handle_socket(mut socket: WebSocket, current_time: Arc<Mutex<f64>>, mus
                         break;
                     }
                     last_music = val;
+                }
+            }
+
+            if let Ok(mut queue) = msg_queue_cln.try_lock() {
+                while let Some(msg) = queue.pop() {
+                    if socket.send(msg).await.is_err() {
+                        break 'outer;
+                    }
                 }
             }
         }
