@@ -1,4 +1,4 @@
-use std::{sync::Arc, mem::size_of, path::Path, ffi::c_void, fs};
+use std::{sync::Arc, mem::size_of, path::Path, ffi::c_void, fs, time::Duration};
 
 use serde_json::Value;
 use windows::{Win32::{System::{ProcessStatus::{EnumProcesses, GetModuleBaseNameW, GetProcessImageFileNameW, EnumProcessModulesEx, LIST_MODULES_ALL}, Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, WaitForSingleObject, INFINITE}, Diagnostics::Debug::ReadProcessMemory}, Foundation::{HMODULE, CloseHandle, MAX_PATH, GetLastError, HANDLE, WAIT_OBJECT_0}, Storage::FileSystem::{FindFirstChangeNotificationW, FILE_NOTIFY_CHANGE_LAST_WRITE, FindCloseChangeNotification, FindNextChangeNotification}, UI::Shell::{SHGetKnownFolderPath, FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG}}, core::HSTRING};
@@ -52,14 +52,19 @@ pub fn current_time_monitor(current_time: Arc<Mutex<f64>>) {
                                                         let base_name = String::from_utf16_lossy(&base_name).trim().to_lowercase();
 
                                                         if base_name.find("cloudmusic.dll").is_some() {
+                                                            let mut buf: [u8; 8] = [0; 8];
+                                                            let addr = hmod.0 + 0xA74570;
+                                                            let mut last_val = -1.0;
                                                             loop {
-                                                                let mut buf: [u8; 8] = [0; 8];
-                                                                let addr = hmod.0 + 0xA74570;
                                                                 let ret = ReadProcessMemory(proc, addr as *mut c_void, buf.as_mut_ptr() as *mut c_void, 8, None);
                                                                 if ret.into() {
                                                                     let val = f64::from_le_bytes(buf);
-                                                                    let mut num = current_time.lock().await;
-                                                                    *num = val;
+                                                                    if val != last_val {
+                                                                        let mut num = current_time.lock().await;
+                                                                        *num = val;
+                                                                        last_val = val;
+                                                                        std::thread::sleep(Duration::from_millis(100));
+                                                                    }
                                                                 } else {
                                                                     break;
                                                                 }

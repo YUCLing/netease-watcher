@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
@@ -28,6 +28,10 @@ async fn handle_socket(mut socket: WebSocket, current_time: Arc<Mutex<f64>>, mus
                         break 'outer;
                     }
                 }
+                // we've already sent some messages, take a nap
+                std::thread::sleep(Duration::from_millis(300));
+            } else {
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
     });
@@ -44,6 +48,8 @@ async fn handle_socket(mut socket: WebSocket, current_time: Arc<Mutex<f64>>, mus
                 }).to_string()));
                 last_val = val;
             }
+            // no need to be very accurate
+            std::thread::sleep(Duration::from_millis(500));
         }
     });
 
@@ -59,6 +65,8 @@ async fn handle_socket(mut socket: WebSocket, current_time: Arc<Mutex<f64>>, mus
                 }).to_string()));
                 last_val = val;
             }
+            // reduce cpu load, query too frequent is not necessary since we've got some latency on filesystem already
+            std::thread::sleep(Duration::from_secs(3));
         }
     });
 
