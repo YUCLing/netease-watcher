@@ -22,6 +22,10 @@ pub struct State(Arc<Mutex<f64>>, Arc<Mutex<Option<Music>>>);
 
 #[tokio::main]
 async fn main() {
+    println!("Netease Cloud Music Status Monitor v{}", env!("CARGO_PKG_VERSION"));
+    println!("by YUCLing");
+    println!("= cheers! =");
+
     let current_time = Arc::new(Mutex::new(-1.0));
     let music: Arc<Mutex<Option<Music>>> = Arc::new(Mutex::new(None));
 
@@ -50,6 +54,7 @@ async fn main() {
             .route("/ws", get(websocket::ws_handler))
             .with_state(State(current_time_ref, music_ref));
 
+        println!("Starting websocket server at port {}", port);
         axum::Server::bind(&format!("0.0.0.0:{}", port).parse().unwrap())
             .serve(app.into_make_service())
             .await
