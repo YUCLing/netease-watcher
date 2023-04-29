@@ -3,11 +3,11 @@ use std::{sync::Arc, mem::size_of, path::Path, ffi::c_void, fs, time::Duration};
 use serde_json::Value;
 use windows::{Win32::{System::{ProcessStatus::{EnumProcesses, GetModuleBaseNameW, GetProcessImageFileNameW, EnumProcessModulesEx, LIST_MODULES_ALL}, Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, WaitForSingleObject, INFINITE}, Diagnostics::Debug::ReadProcessMemory}, Foundation::{HMODULE, CloseHandle, MAX_PATH, GetLastError, HANDLE, WAIT_OBJECT_0}, Storage::FileSystem::{FindFirstChangeNotificationW, FILE_NOTIFY_CHANGE_LAST_WRITE, FindCloseChangeNotification, FindNextChangeNotification}, UI::Shell::{SHGetKnownFolderPath, FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG}}, core::HSTRING};
 
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::Music;
 
-pub fn current_time_monitor(current_time: Arc<Mutex<f64>>) {
+pub fn current_time_monitor(current_time: Arc<Mutex<f64>>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             unsafe {
@@ -87,7 +87,7 @@ pub fn current_time_monitor(current_time: Arc<Mutex<f64>>) {
             // no netease found, wait
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
-    });
+    })
 }
 
 fn update_music(file_path: &str, music: &Arc<Mutex<Option<Music>>>) {
@@ -142,7 +142,7 @@ fn update_music(file_path: &str, music: &Arc<Mutex<Option<Music>>>) {
     }
 }
 
-pub fn music_monitor(music: Arc<Mutex<Option<Music>>>) {
+pub fn music_monitor(music: Arc<Mutex<Option<Music>>>) -> JoinHandle<()> {
     let app_data_path;
     unsafe {
         let path = SHGetKnownFolderPath(&FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG(0), None).expect("Unable to fetch AppData path.");
@@ -167,5 +167,5 @@ pub fn music_monitor(music: Arc<Mutex<Option<Music>>>) {
             }
             FindCloseChangeNotification(handle);
         }
-    });
+    })
 }
