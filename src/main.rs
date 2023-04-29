@@ -25,6 +25,14 @@ async fn main() {
     let current_time = Arc::new(Mutex::new(-1.0));
     let music: Arc<Mutex<Option<Music>>> = Arc::new(Mutex::new(None));
 
+    let mut port: i32 = 2458;
+
+    if let Ok(p) = std::env::var("PORT") {
+        if let Ok(p) = p.parse() {
+            port = p;
+        }
+    }
+
     {
         let current_time_ref = Arc::clone(&current_time);
         netease::current_time_monitor(current_time_ref);
@@ -42,7 +50,7 @@ async fn main() {
             .route("/ws", get(websocket::ws_handler))
             .with_state(State(current_time_ref, music_ref));
 
-        axum::Server::bind(&"0.0.0.0:3000".parse().unwrap())
+        axum::Server::bind(&format!("0.0.0.0:{}", port).parse().unwrap())
             .serve(app.into_make_service())
             .await
             .unwrap();
