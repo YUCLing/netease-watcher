@@ -83,6 +83,9 @@ pub fn current_time_monitor(current_time: Arc<Mutex<f64>>) {
                     }
                 }
             }
+
+            // no netease found, wait
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
     });
 }
