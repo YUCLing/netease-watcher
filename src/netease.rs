@@ -1,13 +1,13 @@
-use std::{sync::Arc, mem::size_of, path::Path, ffi::c_void, fs, time::Duration};
+use std::{mem::size_of, path::Path, ffi::c_void, fs, time::Duration};
 
 use serde_json::Value;
 use windows::{Win32::{System::{ProcessStatus::{EnumProcesses, GetModuleBaseNameW, GetProcessImageFileNameW, EnumProcessModulesEx, LIST_MODULES_ALL}, Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, WaitForSingleObject, INFINITE}, Diagnostics::Debug::ReadProcessMemory}, Foundation::{HMODULE, CloseHandle, MAX_PATH, GetLastError, HANDLE, WAIT_OBJECT_0}, Storage::FileSystem::{FindFirstChangeNotificationW, FILE_NOTIFY_CHANGE_LAST_WRITE, FindCloseChangeNotification, FindNextChangeNotification}, UI::Shell::{SHGetKnownFolderPath, FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG}}, core::HSTRING};
 
-use tokio::{sync::Mutex, task::JoinHandle};
+use tokio::{sync::watch::Sender, task::JoinHandle};
 
 use crate::Music;
 
-pub fn current_time_monitor(current_time: Arc<Mutex<f64>>) -> JoinHandle<()> {
+pub fn current_time_monitor(current_time: Sender<f64>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             unsafe {
@@ -60,9 +60,9 @@ pub fn current_time_monitor(current_time: Arc<Mutex<f64>>) -> JoinHandle<()> {
                                                                 if ret.into() {
                                                                     let val = f64::from_le_bytes(buf);
                                                                     if val != last_val {
-                                                                        let mut num = current_time.lock().await;
-                                                                        *num = val;
-                                                                        last_val = val;
+                                                                        if current_time.send(val).is_ok() {
+                                                                            last_val = val;
+                                                                        }
                                                                         std::thread::sleep(Duration::from_millis(100));
                                                                     }
                                                                 } else {
@@ -90,7 +90,7 @@ pub fn current_time_monitor(current_time: Arc<Mutex<f64>>) -> JoinHandle<()> {
     })
 }
 
-fn update_music(file_path: &str, music: &Arc<Mutex<Option<Music>>>) {
+fn update_music(file_path: &str, music: &Sender<Option<Music>>) {
     match fs::read_to_string(file_path) {
         Ok(content) => {
             let json = serde_json::from_str::<Value>(&content);
@@ -124,14 +124,13 @@ fn update_music(file_path: &str, music: &Arc<Mutex<Option<Music>>>) {
             } else {
                 new_val = None;
             }
-            let mut m = music.blocking_lock();
-            if new_val != *m {
+            if new_val != *music.borrow() {
                 println!("Music changed to {}", if let Some(music) = new_val.clone() {
                     format!("{} - {}", music.name, music.artists.join(", "))
                 } else {
                     "*no music*".to_string()
                 });
-                *m = new_val;
+                let _ = music.send(new_val);
             }
         },
         Err(x) => {
@@ -142,7 +141,7 @@ fn update_music(file_path: &str, music: &Arc<Mutex<Option<Music>>>) {
     }
 }
 
-pub fn music_monitor(music: Arc<Mutex<Option<Music>>>) -> JoinHandle<()> {
+pub fn music_monitor(music: Sender<Option<Music>>) -> JoinHandle<()> {
     let app_data_path;
     unsafe {
         let path = SHGetKnownFolderPath(&FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG(0), None).expect("Unable to fetch AppData path.");

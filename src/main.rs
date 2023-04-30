@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use axum::{Router, routing::get};
 use serde::Serialize;
-use tokio::sync::Mutex;
+use tokio::sync::watch::{self, Receiver};
 
 mod netease;
 mod websocket;
@@ -18,7 +16,7 @@ pub struct Music {
 }
 
 #[derive(Clone)]
-pub struct State(Arc<Mutex<f64>>, Arc<Mutex<Option<Music>>>);
+pub struct State(Receiver<f64>, Receiver<Option<Music>>);
 
 #[tokio::main]
 async fn main() {
@@ -26,33 +24,23 @@ async fn main() {
     println!("by YUCLing");
     println!("= cheers! =");
 
-    let current_time = Arc::new(Mutex::new(-1.0));
-    let music: Arc<Mutex<Option<Music>>> = Arc::new(Mutex::new(None));
+    let (time_tx, time_rx) = watch::channel(-1.0);
+    let (music_tx, music_rx) = watch::channel(None);
 
     let mut port: i32 = 2458;
-
     if let Ok(p) = std::env::var("PORT") {
         if let Ok(p) = p.parse() {
             port = p;
         }
     }
 
-    {
-        let current_time_ref = Arc::clone(&current_time);
-        netease::current_time_monitor(current_time_ref);
-    }
+    netease::current_time_monitor(time_tx);
+    netease::music_monitor(music_tx);
 
     {
-        let music_ref = Arc::clone(&music);
-        netease::music_monitor(music_ref);
-    }
-
-    {
-        let current_time_ref = Arc::clone(&current_time);
-        let music_ref = Arc::clone(&music);
         let app = Router::new()
             .route("/ws", get(websocket::ws_handler))
-            .with_state(State(current_time_ref, music_ref));
+            .with_state(State(time_rx, music_rx));
 
         println!("Starting websocket server at port {}", port);
         axum::Server::bind(&format!("0.0.0.0:{}", port).parse().unwrap())
