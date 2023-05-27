@@ -128,7 +128,7 @@ fn update_music(file_path: &str, music: &Sender<Option<Music>>) {
             }
             if new_val != *music.borrow() {
                 println!("Music changed to {}", if let Some(music) = new_val.clone() {
-                    format!("{} - {}", music.name, music.artists.join(", "))
+                    format!("{} - {} ({})", music.name, music.artists.join(", "), music.id)
                 } else {
                     "*no music*".to_string()
                 });
