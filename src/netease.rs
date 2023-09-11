@@ -54,7 +54,8 @@ pub fn current_time_monitor(current_time: Sender<f64>) -> JoinHandle<()> {
                                                         if base_name.find("cloudmusic.dll").is_some() {
                                                             let mut buf: [u8; 8] = [0; 8];
                                                             // offset of previous version of 2.10.10: 0xA74570
-                                                            let addr = hmod.0 + 0xA77580;
+                                                            // offset: 0xA77580
+                                                            let addr = hmod.0 + 0xA7A580;
                                                             let mut last_val = -1.0;
                                                             loop {
                                                                 let ret = ReadProcessMemory(proc, addr as *mut c_void, buf.as_mut_ptr() as *mut c_void, 8, None);
