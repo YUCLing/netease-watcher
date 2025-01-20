@@ -27,7 +27,7 @@ async fn main() {
     let (time_tx, time_rx) = watch::channel(-1.0);
     let (music_tx, music_rx) = watch::channel(None);
 
-    let mut port: i32 = 2458;
+    let mut port: i32 = 3574;
     if let Ok(p) = std::env::var("PORT") {
         if let Ok(p) = p.parse() {
             port = p;
