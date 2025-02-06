@@ -1,8 +1,9 @@
-use axum::{Router, routing::get};
+use axum::{routing::get, Router};
 use serde::Serialize;
 use tokio::sync::watch::{self, Receiver};
 
 mod netease;
+mod util;
 mod websocket;
 
 #[derive(Clone, Serialize, PartialEq, Debug)]
@@ -12,7 +13,7 @@ pub struct Music {
     album: String,
     artists: Vec<String>,
     duration: i64,
-    name: String
+    name: String,
 }
 
 #[derive(Clone)]
@@ -20,7 +21,10 @@ pub struct State(Receiver<f64>, Receiver<Option<Music>>);
 
 #[tokio::main]
 async fn main() {
-    println!("Netease Cloud Music Status Monitor v{}", env!("CARGO_PKG_VERSION"));
+    println!(
+        "Netease Cloud Music Status Monitor v{}",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("by YUCLing");
     println!("= cheers! =");
 
@@ -43,9 +47,9 @@ async fn main() {
             .with_state(State(time_rx, music_rx));
 
         println!("Starting websocket server at port {}", port);
-        axum::Server::bind(&format!("0.0.0.0:{}", port).parse().unwrap())
-            .serve(app.into_make_service())
+        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port))
             .await
             .unwrap();
+        axum::serve(listener, app).await.unwrap();
     }
 }

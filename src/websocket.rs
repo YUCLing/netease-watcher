@@ -1,10 +1,16 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
-    response::IntoResponse
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
+    response::IntoResponse,
 };
-use tokio::{sync::{Mutex, watch::Receiver}, runtime::Handle};
+use tokio::{
+    runtime::Handle,
+    sync::{watch::Receiver, Mutex},
+};
 
 use crate::Music;
 
@@ -18,7 +24,11 @@ pub async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, time_rx, music_rx))
 }
 
-async fn handle_socket(mut socket: WebSocket, mut current_time: Receiver<f64>, mut music: Receiver<Option<Music>>) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    mut current_time: Receiver<f64>,
+    mut music: Receiver<Option<Music>>,
+) {
     let msg_queue: Arc<Mutex<Vec<Message>>> = Arc::new(Mutex::new(vec![]));
 
     let msg_queue_cln = Arc::clone(&msg_queue);
@@ -36,29 +46,39 @@ async fn handle_socket(mut socket: WebSocket, mut current_time: Receiver<f64>, m
     });
 
     let msg_queue_cln = Arc::clone(&msg_queue);
-    let mut current_time_task = tokio::task::spawn_blocking(move || {
-        loop {
-            if Handle::current().block_on(async {
-                current_time.changed().await
-            }).is_err() {break;}
-            msg_queue_cln.blocking_lock().push(Message::Text(serde_json::json!({
+    let mut current_time_task = tokio::task::spawn_blocking(move || loop {
+        if Handle::current()
+            .block_on(async { current_time.changed().await })
+            .is_err()
+        {
+            break;
+        }
+        msg_queue_cln.blocking_lock().push(Message::Text(
+            serde_json::json!({
                 "type": "timechange",
                 "value": *current_time.borrow()
-            }).to_string()));
-        }
+            })
+            .to_string()
+            .into(),
+        ));
     });
 
     let msg_queue_cln = Arc::clone(&msg_queue);
-    let mut music_change_task = tokio::task::spawn_blocking(move || {
-        loop {
-            if Handle::current().block_on(async {
-                music.changed().await
-            }).is_err() {break;}
-            msg_queue_cln.blocking_lock().push(Message::Text(serde_json::json!({
+    let mut music_change_task = tokio::task::spawn_blocking(move || loop {
+        if Handle::current()
+            .block_on(async { music.changed().await })
+            .is_err()
+        {
+            break;
+        }
+        msg_queue_cln.blocking_lock().push(Message::Text(
+            serde_json::json!({
                 "type": "musicchange",
                 "value": *music.borrow()
-            }).to_string()));
-        }
+            })
+            .to_string()
+            .into(),
+        ));
     });
 
     tokio::select! {
@@ -73,6 +93,6 @@ async fn handle_socket(mut socket: WebSocket, mut current_time: Receiver<f64>, m
 
         }
     };
-    
+
     println!("Websocket disconnected.");
 }
