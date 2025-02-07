@@ -5,7 +5,7 @@ use sqlite::OpenFlags;
 use windows::{
     core::{HSTRING, PCWSTR},
     Win32::{
-        Foundation::{CloseHandle, GetLastError, HMODULE, MAX_PATH},
+        Foundation::{GetLastError, HMODULE, MAX_PATH},
         Storage::FileSystem::{
             CreateFileW, ReadDirectoryChangesW, FILE_ACTION_MODIFIED, FILE_FLAG_BACKUP_SEMANTICS,
             FILE_LIST_DIRECTORY, FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ,
@@ -38,12 +38,12 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                 first = false;
             }
             unsafe {
-                let mut process_ids: Vec<u32> = Vec::with_capacity(8192);
+                let mut process_ids = [0; 8192];
                 let mut cb_needed: u32 = 0;
 
                 let ret = EnumProcesses(
                     process_ids.as_mut_ptr(),
-                    process_ids.capacity().try_into().unwrap(),
+                    process_ids.len() as u32,
                     &mut cb_needed,
                 );
 
@@ -52,15 +52,13 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                 }
 
                 let count = cb_needed as usize / size_of::<u32>();
-                process_ids.set_len(count);
-                'process: for i in 0..count {
-                    let pid = process_ids.get(i).unwrap();
+                'process: for pid in process_ids.iter().take(count) {
                     let Ok(proc) =
                         OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, *pid)
                     else {
                         continue;
                     };
-                    let mut file_name = vec![0; MAX_PATH.try_into().unwrap()];
+                    let mut file_name = [0; MAX_PATH as usize];
                     let len = GetProcessImageFileNameW(proc, &mut file_name);
 
                     if len == 0 {
@@ -92,21 +90,16 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                     };
 
                     let count = cb_needed as usize / size_of::<HMODULE>();
-                    for i in 0..count {
-                        let hmod = process_modules.get(i).unwrap();
-
+                    for hmod in process_modules.iter().take(count) {
                         let mut base_name = vec![0; MAX_PATH.try_into().unwrap()];
                         let len = GetModuleBaseNameW(proc, *hmod, &mut base_name);
                         if len == 0 {
-                            if GetLastError().0 == 6 {
+                            let err = GetLastError();
+                            if err.0 == 6 {
                                 // process exited.
                                 continue 'process;
                             }
-                            println!(
-                                "Failed to find module name for {} ({:?})",
-                                file_name,
-                                GetLastError()
-                            );
+                            println!("Failed to find module name for {} ({:?})", file_name, err);
                             continue;
                         }
 
@@ -116,28 +109,20 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                             continue;
                         }
 
-                        let addrs = util::find_movsd_instructions(proc, hmod.0 as usize);
-
-                        let mut valid_addr = 0;
-
-                        for addr in addrs {
-                            if util::read_double_from_addr(proc, addr as *mut c_void) >= 0.0 {
-                                valid_addr = addr;
-                                break;
-                            }
-                        }
-                        if valid_addr == 0 {
+                        let Some(addr) = util::find_movsd_instructions(proc, hmod.0 as usize)
+                        else {
                             continue;
-                        }
+                        };
 
                         // found addr of the play progress
                         let mut last_val = -1.0;
                         loop {
-                            let val = util::read_double_from_addr(proc, valid_addr as *mut c_void);
+                            let val = util::read_double_from_addr(proc, addr as *mut c_void);
                             if val < 0.0 {
                                 // unable to read properly
                                 continue 'main;
                             }
+                            println!("{}", val);
                             if val != last_val {
                                 if current_time.send(val).is_ok() {
                                     last_val = val;
@@ -146,8 +131,6 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                             }
                         }
                     }
-
-                    let _ = CloseHandle(proc);
                 }
             }
         }
@@ -203,9 +186,17 @@ fn update_music(file_path: &str, music: &Sender<Option<Music>>) {
                                 if new_val != *music.borrow() {
                                     println!(
                                         "Music changed to {}",
-                                        if let Some(music) = new_val.clone() {
+                                        if let Some(music) = new_val.as_ref() {
                                             format!(
-                                                "{} - {} ({})",
+                                                "{}{} - {} ({})",
+                                                if music.aliases.is_none() {
+                                                    "".to_string()
+                                                } else {
+                                                    format!(
+                                                        " [{}]",
+                                                        music.aliases.as_ref().unwrap().join("/")
+                                                    )
+                                                },
                                                 music.name,
                                                 music.artists.join(", "),
                                                 music.id

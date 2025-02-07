@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 
+use lightningscanner::Scanner;
 use windows::Win32::{
     Foundation::HANDLE,
     System::{
@@ -11,10 +12,9 @@ use windows::Win32::{
     },
 };
 
-pub fn find_movsd_instructions(process: HANDLE, module_base: usize) -> Vec<usize> {
-    let pattern = &[0xF2, 0x0F, 0x11, 0x3D]; // MOVSD [offset], XMM7
+pub fn find_movsd_instructions(process: HANDLE, module_base: usize) -> Option<usize> {
+    let scanner = Scanner::new("f2 0f 11 3d ?? ?? ?? ?? f2 0f 11 35"); // MOVSD [offset], XMM7 & MOVSD [offset], XMM6
 
-    let mut found_addresses = Vec::new();
     let mut mbi = MEMORY_BASIC_INFORMATION::default();
     let mut address = module_base;
 
@@ -40,29 +40,31 @@ pub fn find_movsd_instructions(process: HANDLE, module_base: usize) -> Vec<usize
                 )
                 .is_ok()
                 {
-                    for i in 0..(bytes_read - 8) {
-                        if buffer[i..i + 4] == *pattern {
-                            let instruction_addr = address + i;
-                            let offset_bytes = &buffer[i + 4..i + 8];
-                            let offset = i32::from_le_bytes([
-                                offset_bytes[0],
-                                offset_bytes[1],
-                                offset_bytes[2],
-                                offset_bytes[3],
-                            ]) as isize;
+                    let buf_ptr = buffer.as_ptr();
+                    let result = scanner.find(None, buf_ptr, bytes_read);
+                    let addr = result.get_addr() as usize;
+                    if addr != 0 {
+                        let relative_addr = addr - buf_ptr as usize; // we are doing scanning on our copy of memory, so get the relative offset instead.
+                        let instruction_addr = address + relative_addr;
+                        let offset_bytes = &buffer[relative_addr + 4..relative_addr + 8];
+                        let offset = i32::from_le_bytes([
+                            offset_bytes[0],
+                            offset_bytes[1],
+                            offset_bytes[2],
+                            offset_bytes[3],
+                        ]) as isize;
 
-                            let rip = instruction_addr + 8;
-                            let target_addr = rip.wrapping_add(offset as usize);
+                        let rip = instruction_addr + 8;
+                        let target_addr = rip.wrapping_add(offset as usize);
 
-                            found_addresses.push(target_addr);
-                        }
+                        return Some(target_addr);
                     }
                 }
             }
             address = mbi.BaseAddress as usize + mbi.RegionSize;
         }
     }
-    found_addresses
+    None
 }
 
 pub fn read_double_from_addr(process: HANDLE, addr: *mut c_void) -> f64 {
