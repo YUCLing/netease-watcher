@@ -3,22 +3,20 @@ use std::{ffi::c_void, mem::size_of, path::Path, time::Duration};
 use serde_json::Value;
 use sqlite::OpenFlags;
 use windows::{
-    core::HSTRING,
+    core::{HSTRING, PCWSTR},
     Win32::{
-        Foundation::{CloseHandle, GetLastError, HANDLE, HMODULE, MAX_PATH, WAIT_OBJECT_0},
+        Foundation::{CloseHandle, GetLastError, HMODULE, MAX_PATH},
         Storage::FileSystem::{
-            FindCloseChangeNotification, FindFirstChangeNotificationW, FindNextChangeNotification,
-            FILE_NOTIFY_CHANGE_LAST_WRITE,
+            CreateFileW, ReadDirectoryChangesW, FILE_ACTION_MODIFIED, FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_LIST_DIRECTORY, FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, OPEN_EXISTING,
         },
         System::{
             ProcessStatus::{
                 EnumProcessModulesEx, EnumProcesses, GetModuleBaseNameW, GetProcessImageFileNameW,
                 LIST_MODULES_ALL,
             },
-            Threading::{
-                OpenProcess, WaitForSingleObject, INFINITE, PROCESS_QUERY_INFORMATION,
-                PROCESS_VM_READ,
-            },
+            Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ},
         },
         UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG},
     },
@@ -30,7 +28,15 @@ use crate::{util, Music};
 
 pub fn current_time_monitor(current_time: Sender<f64>) {
     std::thread::spawn(move || {
-        loop {
+        let mut first = true;
+        'main: loop {
+            if !first {
+                println!("Unable to find/open Netease Cloud Music process");
+                // no netease found, wait
+                std::thread::sleep(Duration::from_secs(5));
+            } else {
+                first = false;
+            }
             unsafe {
                 let mut process_ids: Vec<u32> = Vec::with_capacity(8192);
                 let mut cb_needed: u32 = 0;
@@ -40,259 +46,265 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                     process_ids.capacity().try_into().unwrap(),
                     &mut cb_needed,
                 );
-                if ret.is_ok() {
-                    let count = cb_needed as usize / size_of::<u32>();
-                    process_ids.set_len(count);
+
+                if ret.is_err() {
+                    continue;
+                }
+
+                let count = cb_needed as usize / size_of::<u32>();
+                process_ids.set_len(count);
+                'process: for i in 0..count {
+                    let pid = process_ids.get(i).unwrap();
+                    let Ok(proc) =
+                        OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, *pid)
+                    else {
+                        continue;
+                    };
+                    let mut file_name = vec![0; MAX_PATH.try_into().unwrap()];
+                    let len = GetProcessImageFileNameW(proc, &mut file_name);
+
+                    if len == 0 {
+                        println!(
+                            "Failed to find process name for {} ({:?})",
+                            pid,
+                            GetLastError()
+                        );
+                        continue;
+                    }
+
+                    let file_name = String::from_utf16_lossy(&file_name[0..(len as usize)]);
+                    let name = Path::new(&file_name).file_name().unwrap_or_default();
+                    if name != "cloudmusic.exe" {
+                        continue;
+                    }
+
+                    let mut process_modules = [HMODULE::default(); 512];
+                    let mut cb_needed: u32 = 0;
+
+                    let Ok(_) = EnumProcessModulesEx(
+                        proc,
+                        process_modules.as_mut_ptr(),
+                        512,
+                        &mut cb_needed,
+                        LIST_MODULES_ALL,
+                    ) else {
+                        continue;
+                    };
+
+                    let count = cb_needed as usize / size_of::<HMODULE>();
                     for i in 0..count {
-                        let pid = process_ids.get(i).unwrap();
-                        let proc =
-                            OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, *pid);
-                        if let Ok(proc) = proc {
-                            let mut file_name = vec![0; MAX_PATH.try_into().unwrap()];
-                            let len = GetProcessImageFileNameW(proc, &mut file_name);
+                        let hmod = process_modules.get(i).unwrap();
 
-                            if len == 0 {
-                                println!(
-                                    "Failed to find process name for {} ({:?})",
-                                    pid,
-                                    GetLastError()
-                                );
-                            } else {
-                                let file_name =
-                                    String::from_utf16_lossy(&file_name[0..(len as usize)]);
-                                if let Some(name) = Path::new(&file_name).file_name() {
-                                    if name == "cloudmusic.exe" {
-                                        let mut process_modules = [HMODULE::default(); 512];
-                                        let mut cb_needed: u32 = 0;
-
-                                        let ret = EnumProcessModulesEx(
-                                            proc,
-                                            process_modules.as_mut_ptr(),
-                                            512,
-                                            &mut cb_needed,
-                                            LIST_MODULES_ALL,
-                                        );
-                                        if ret.is_ok() {
-                                            let count = cb_needed as usize / size_of::<HMODULE>();
-                                            for i in 0..count {
-                                                let hmod = process_modules.get(i).unwrap();
-
-                                                let mut base_name =
-                                                    vec![0; MAX_PATH.try_into().unwrap()];
-                                                let len =
-                                                    GetModuleBaseNameW(proc, *hmod, &mut base_name);
-                                                if len == 0 {
-                                                    println!(
-                                                        "Failed to find module name for {} ({:?})",
-                                                        file_name,
-                                                        GetLastError()
-                                                    );
-                                                } else {
-                                                    let base_name = String::from_utf16_lossy(
-                                                        &base_name[0..(len as usize)],
-                                                    )
-                                                    .to_lowercase();
-
-                                                    if base_name == "cloudmusic.dll" {
-                                                        let addrs = util::find_movsd_instructions(
-                                                            proc,
-                                                            hmod.0 as usize,
-                                                        );
-
-                                                        let mut valid_addr = 0;
-
-                                                        for addr in addrs {
-                                                            if util::read_double_from_addr(
-                                                                proc,
-                                                                addr as *mut c_void,
-                                                            ) >= 0.0
-                                                            {
-                                                                valid_addr = addr;
-                                                                break;
-                                                            }
-                                                        }
-
-                                                        if valid_addr != 0 {
-                                                            // found addr of the play progress
-                                                            let mut last_val = -1.0;
-                                                            loop {
-                                                                let val =
-                                                                    util::read_double_from_addr(
-                                                                        proc,
-                                                                        valid_addr as *mut c_void,
-                                                                    );
-                                                                if val != last_val {
-                                                                    if current_time
-                                                                        .send(val)
-                                                                        .is_ok()
-                                                                    {
-                                                                        last_val = val;
-                                                                    }
-                                                                    std::thread::sleep(
-                                                                        Duration::from_millis(100),
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                        let mut base_name = vec![0; MAX_PATH.try_into().unwrap()];
+                        let len = GetModuleBaseNameW(proc, *hmod, &mut base_name);
+                        if len == 0 {
+                            if GetLastError().0 == 6 {
+                                // process exited.
+                                continue 'process;
                             }
+                            println!(
+                                "Failed to find module name for {} ({:?})",
+                                file_name,
+                                GetLastError()
+                            );
+                            continue;
+                        }
 
-                            let _ = CloseHandle(proc);
+                        if String::from_utf16_lossy(&base_name[0..(len as usize)]).to_lowercase()
+                            != "cloudmusic.dll"
+                        {
+                            continue;
+                        }
+
+                        let addrs = util::find_movsd_instructions(proc, hmod.0 as usize);
+
+                        let mut valid_addr = 0;
+
+                        for addr in addrs {
+                            if util::read_double_from_addr(proc, addr as *mut c_void) >= 0.0 {
+                                valid_addr = addr;
+                                break;
+                            }
+                        }
+                        if valid_addr == 0 {
+                            continue;
+                        }
+
+                        // found addr of the play progress
+                        let mut last_val = -1.0;
+                        loop {
+                            let val = util::read_double_from_addr(proc, valid_addr as *mut c_void);
+                            if val < 0.0 {
+                                // unable to read properly
+                                continue 'main;
+                            }
+                            if val != last_val {
+                                if current_time.send(val).is_ok() {
+                                    last_val = val;
+                                }
+                                std::thread::sleep(Duration::from_millis(100));
+                            }
                         }
                     }
+
+                    let _ = CloseHandle(proc);
                 }
             }
-
-            println!("Unable to find/open Netease Cloud Music process");
-            // no netease found, wait
-            std::thread::sleep(Duration::from_secs(5));
         }
     });
 }
 
 fn update_music(file_path: &str, music: &Sender<Option<Music>>) {
-    let conn = sqlite::Connection::open_with_flags(file_path, OpenFlags::new().with_read_only());
-    match conn {
-        Ok(conn) => {
-            let stmt =
-                conn.prepare("SELECT jsonStr FROM historyTracks ORDER BY playtime DESC LIMIT 1");
-            match stmt {
-                Ok(mut stmt) => {
-                    if let Ok(state) = stmt.next() {
-                        match state {
-                            sqlite::State::Row => match stmt.read::<String, _>(0) {
-                                Ok(x) => {
-                                    let json = serde_json::from_str::<Value>(&x);
-                                    let new_val;
-                                    if let Ok(opt) = json.and_then(|x| {
-                                        let album = x.get("album").unwrap();
-                                        let album_name = album
-                                            .get("name")
-                                            .unwrap()
-                                            .as_str()
-                                            .unwrap()
-                                            .to_string();
-                                        let thumbnail = album
-                                            .get("picUrl")
-                                            .unwrap()
-                                            .as_str()
-                                            .unwrap()
-                                            .to_string();
-                                        let artists = x.get("artists").unwrap().as_array().unwrap();
-                                        let mut artists_vec = Vec::with_capacity(artists.len());
-                                        for i in artists {
-                                            artists_vec.push(
-                                                i.get("name")
-                                                    .unwrap()
-                                                    .as_str()
-                                                    .unwrap()
-                                                    .to_string(),
-                                            );
-                                        }
-                                        let duration = x.get("duration").unwrap().as_i64().unwrap();
-                                        let name =
-                                            x.get("name").unwrap().as_str().unwrap().to_string();
-                                        let id = x
-                                            .get("id")
-                                            .unwrap()
-                                            .as_str()
-                                            .unwrap()
-                                            .parse()
-                                            .unwrap_or(0);
-                                        Ok(Some(Music {
-                                            album: album_name,
-                                            thumbnail,
-                                            artists: artists_vec,
-                                            id,
-                                            duration,
-                                            name,
-                                        }))
-                                    }) {
-                                        new_val = opt;
-                                    } else {
-                                        new_val = None;
-                                    }
-                                    if new_val != *music.borrow() {
-                                        println!(
-                                            "Music changed to {}",
-                                            if let Some(music) = new_val.clone() {
-                                                format!(
-                                                    "{} - {} ({})",
-                                                    music.name,
-                                                    music.artists.join(", "),
-                                                    music.id
-                                                )
-                                            } else {
-                                                "*no music*".to_string()
-                                            }
+    if let Ok(conn) = sqlite::Connection::open_with_flags(
+        file_path,
+        OpenFlags::new().with_read_only().with_no_mutex(),
+    ) {
+        let stmt = conn.prepare("SELECT jsonStr FROM historyTracks ORDER BY playtime DESC LIMIT 1");
+        match stmt {
+            Ok(mut stmt) => {
+                if let Ok(state) = stmt.next() {
+                    match state {
+                        sqlite::State::Row => match stmt.read::<String, _>(0) {
+                            Ok(x) => {
+                                let json = serde_json::from_str::<Value>(&x);
+                                let new_val = json.ok().map(|x| {
+                                    let album = x.get("album").unwrap();
+                                    let album_name =
+                                        album.get("name").unwrap().as_str().unwrap().to_string();
+                                    let thumbnail =
+                                        album.get("picUrl").unwrap().as_str().unwrap().to_string();
+                                    let artists = x.get("artists").unwrap().as_array().unwrap();
+                                    let mut artists_vec = Vec::with_capacity(artists.len());
+                                    for i in artists {
+                                        artists_vec.push(
+                                            i.get("name").unwrap().as_str().unwrap().to_string(),
                                         );
-                                        let _ = music.send(new_val);
                                     }
+                                    let duration = x.get("duration").unwrap().as_i64().unwrap();
+                                    let name = x.get("name").unwrap().as_str().unwrap().to_string();
+                                    let id =
+                                        x.get("id").unwrap().as_str().unwrap().parse().unwrap_or(0);
+                                    Music {
+                                        album: album_name,
+                                        aliases: x.get("alias").map(|x| {
+                                            x.as_array()
+                                                .unwrap()
+                                                .iter()
+                                                .map(|x| x.as_str().unwrap().to_string())
+                                                .collect()
+                                        }),
+                                        thumbnail,
+                                        artists: artists_vec,
+                                        id,
+                                        duration,
+                                        name,
+                                    }
+                                });
+                                if new_val != *music.borrow() {
+                                    println!(
+                                        "Music changed to {}",
+                                        if let Some(music) = new_val.clone() {
+                                            format!(
+                                                "{} - {} ({})",
+                                                music.name,
+                                                music.artists.join(", "),
+                                                music.id
+                                            )
+                                        } else {
+                                            "*no music*".to_string()
+                                        }
+                                    );
+                                    let _ = music.send(new_val);
                                 }
-                                Err(err) => eprintln!("Unable to read data: {}", err),
-                            },
-                            _ => {
-                                println!("No music has been played.")
                             }
+                            Err(err) => eprintln!("Unable to read data: {}", err),
+                        },
+                        _ => {
+                            println!("No music has been played.")
                         }
                     }
-                }
-                Err(err) => {
-                    if let Some(code) = err.code {
-                        if code == 5 {
-                            // db is locked
-                            std::thread::sleep(Duration::from_millis(50));
-                            update_music(file_path, music); // try again
-                            return;
-                        }
-                    }
-                    eprintln!("Unable to read from database");
                 }
             }
+            Err(err) => {
+                if let Some(code) = err.code {
+                    if code == 5 {
+                        // db is locked
+                        std::thread::sleep(Duration::from_millis(50));
+                        update_music(file_path, music); // try again
+                        return;
+                    }
+                }
+                eprintln!("Unable to read from database");
+            }
         }
-        Err(_) => eprintln!("Unable to open database file"),
     }
 }
 
 pub fn music_monitor(music: Sender<Option<Music>>) {
-    let app_data_path;
-    unsafe {
+    let app_data_path = unsafe {
         let path = SHGetKnownFolderPath(&FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG(0), None)
             .expect("Unable to fetch AppData path.");
-        app_data_path = path.to_string().expect("Unable to call Windows API.");
-    }
+        path.to_string().expect("Unable to call Windows API.")
+    };
     let netease_library_dir = Path::new(&app_data_path)
         .join("NetEase\\CloudMusic\\Library")
         .to_str()
-        .expect("Unable to get path of history file.")
+        .expect("Unable to get path of library.")
         .to_string();
     let netease_webdb_file = format!("{}{}", netease_library_dir, "\\webdb.dat");
     std::thread::spawn(move || {
         update_music(&netease_webdb_file, &music);
 
         unsafe {
-            let handle = FindFirstChangeNotificationW(
-                &HSTRING::from(&netease_library_dir),
-                false,
-                FILE_NOTIFY_CHANGE_LAST_WRITE,
+            let dir = CreateFileW(
+                PCWSTR(HSTRING::from(&netease_library_dir).as_ptr()),
+                FILE_LIST_DIRECTORY.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                None,
             )
-            .expect("Unable to create file change handle.");
+            .expect("Unable to obtain library dir.");
+            let mut buffer: Vec<u32> = vec![0; 1024];
+            let mut bytes_returned = 0;
+
             loop {
-                let ret = WaitForSingleObject(HANDLE(handle.0), INFINITE);
-                match ret {
-                    WAIT_OBJECT_0 => {
-                        update_music(&netease_webdb_file, &music);
-                        FindNextChangeNotification(handle).unwrap();
+                let Ok(_) = ReadDirectoryChangesW(
+                    dir,
+                    buffer.as_mut_ptr() as *mut c_void,
+                    1024,
+                    false,
+                    FILE_NOTIFY_CHANGE_LAST_WRITE,
+                    Some(&mut bytes_returned),
+                    None,
+                    None,
+                ) else {
+                    continue;
+                };
+
+                let mut offset = 0;
+                loop {
+                    let next_entry_offset = buffer[offset];
+                    let action = buffer[offset + 1];
+                    if action == FILE_ACTION_MODIFIED.0 {
+                        let filename_len = buffer[offset + 2] as usize / std::mem::size_of::<u16>();
+                        let filename = String::from_utf16_lossy(std::slice::from_raw_parts(
+                            buffer[offset + 3..offset + 3 + filename_len].as_ptr() as *const u16,
+                            filename_len,
+                        ));
+                        if filename == "webdb.dat" {
+                            std::thread::sleep(Duration::from_millis(10)); // avoid conflict with cloudmusic
+                            update_music(&netease_webdb_file, &music);
+                        }
                     }
-                    _ => break,
+                    if next_entry_offset == 0 {
+                        break;
+                    } else {
+                        offset = next_entry_offset as usize;
+                    }
                 }
             }
-            let _ = FindCloseChangeNotification(handle);
         }
     });
 }

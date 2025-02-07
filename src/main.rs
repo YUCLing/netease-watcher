@@ -9,6 +9,7 @@ mod websocket;
 #[derive(Clone, Serialize, PartialEq, Debug)]
 pub struct Music {
     id: i64,
+    aliases: Option<Vec<String>>,
     thumbnail: String,
     album: String,
     artists: Vec<String>,

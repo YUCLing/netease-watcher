@@ -67,14 +67,6 @@ pub fn find_movsd_instructions(process: HANDLE, module_base: usize) -> Vec<usize
 
 pub fn read_double_from_addr(process: HANDLE, addr: *mut c_void) -> f64 {
     let mut buf: [u8; 8] = [0; 8];
-    let ret = unsafe {
-        ReadProcessMemory(
-            process,
-            addr as *mut c_void,
-            buf.as_mut_ptr() as *mut c_void,
-            8,
-            None,
-        )
-    };
+    let ret = unsafe { ReadProcessMemory(process, addr, buf.as_mut_ptr() as *mut c_void, 8, None) };
     ret.map(|_| f64::from_le_bytes(buf)).unwrap_or(-1.0)
 }
