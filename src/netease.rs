@@ -122,7 +122,6 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                                 // unable to read properly
                                 continue 'main;
                             }
-                            println!("{}", val);
                             if val != last_val {
                                 if current_time.send(val).is_ok() {
                                     last_val = val;
