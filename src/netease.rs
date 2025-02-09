@@ -168,13 +168,24 @@ fn update_music(file_path: &str, music: &Sender<Option<Music>>) {
                                         x.get("id").unwrap().as_str().unwrap().parse().unwrap_or(0);
                                     Music {
                                         album: album_name,
-                                        aliases: x.get("alias").map(|x| {
-                                            x.as_array()
-                                                .unwrap()
-                                                .iter()
-                                                .map(|x| x.as_str().unwrap().to_string())
-                                                .collect()
-                                        }),
+                                        aliases: x
+                                            .get("alias")
+                                            .map(|x| {
+                                                x.as_array()
+                                                    .unwrap()
+                                                    .iter()
+                                                    .map(|x| x.as_str().unwrap().to_string())
+                                                    .collect()
+                                            })
+                                            .and_then(
+                                                |x: Vec<String>| {
+                                                    if x.is_empty() {
+                                                        None
+                                                    } else {
+                                                        Some(x)
+                                                    }
+                                                },
+                                            ),
                                         thumbnail,
                                         artists: artists_vec,
                                         id,
@@ -188,6 +199,7 @@ fn update_music(file_path: &str, music: &Sender<Option<Music>>) {
                                         if let Some(music) = new_val.as_ref() {
                                             format!(
                                                 "{}{} - {} ({})",
+                                                music.name,
                                                 if music.aliases.is_none() {
                                                     "".to_string()
                                                 } else {
@@ -196,7 +208,6 @@ fn update_music(file_path: &str, music: &Sender<Option<Music>>) {
                                                         music.aliases.as_ref().unwrap().join("/")
                                                     )
                                                 },
-                                                music.name,
                                                 music.artists.join(", "),
                                                 music.id
                                             )
