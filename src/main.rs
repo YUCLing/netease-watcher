@@ -44,7 +44,7 @@ async fn main() {
 
     {
         let app = Router::new()
-            .route("/ws", get(websocket::ws_handler))
+            .fallback(get(websocket::ws_handler))
             .with_state(State(time_rx, music_rx));
 
         println!("Starting websocket server at port {}", port);

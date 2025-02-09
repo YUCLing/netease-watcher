@@ -253,9 +253,9 @@ pub fn music_monitor(music: Sender<Option<Music>>) {
         .expect("Unable to get path of library.")
         .to_string();
     let netease_webdb_file = format!("{}{}", netease_library_dir, "\\webdb.dat");
+    let netease_webdb_file_clone = netease_webdb_file.clone();
+    let music_clone = music.clone();
     std::thread::spawn(move || {
-        update_music(&netease_webdb_file, &music);
-
         unsafe {
             let dir = CreateFileW(
                 PCWSTR(HSTRING::from(&netease_library_dir).as_ptr()),
@@ -306,6 +306,12 @@ pub fn music_monitor(music: Sender<Option<Music>>) {
                     }
                 }
             }
+        }
+    });
+    std::thread::spawn(move || {
+        loop {
+            update_music(&netease_webdb_file_clone, &music_clone);
+            std::thread::sleep(Duration::from_secs(10)); // fallback check
         }
     });
 }
