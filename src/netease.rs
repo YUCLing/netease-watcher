@@ -1,7 +1,7 @@
 use std::{ffi::c_void, mem::size_of, path::Path, time::Duration};
 
+use rusqlite::Connection;
 use serde_json::Value;
-use sqlite::OpenFlags;
 use windows::{
     core::{HSTRING, PCWSTR},
     Win32::{
@@ -29,7 +29,7 @@ use crate::{util, Music};
 pub fn current_time_monitor(current_time: Sender<f64>) {
     std::thread::spawn(move || {
         let mut first = true;
-        'main: loop {
+        loop {
             if !first {
                 println!("Unable to find/open Netease Cloud Music process");
                 // no netease found, wait
@@ -94,12 +94,12 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                         let mut base_name = vec![0; MAX_PATH.try_into().unwrap()];
                         let len = GetModuleBaseNameW(proc, *hmod, &mut base_name);
                         if len == 0 {
-                            let err = GetLastError();
-                            if err.0 == 6 {
-                                // process exited.
+                            let err = windows::core::Error::from_win32();
+                            if err.code().0 == 6 {
+                                // process exited
                                 continue 'process;
                             }
-                            println!("Failed to find module name for {} ({:?})", file_name, err);
+                            println!("Failed to find module name for {} ({:?})", file_name, err.message());
                             continue;
                         }
 
@@ -120,7 +120,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                             let val = util::read_double_from_addr(proc, addr as *mut c_void);
                             if val < 0.0 {
                                 // unable to read properly
-                                continue 'main;
+                                continue 'process; // keep trying other processes
                             }
                             if val != last_val {
                                 if current_time.send(val).is_ok() {
@@ -136,108 +136,71 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
     });
 }
 
-fn update_music(file_path: &str, music: &Sender<Option<Music>>) {
-    if let Ok(conn) = sqlite::Connection::open_with_flags(
-        file_path,
-        OpenFlags::new().with_read_only().with_no_mutex(),
-    ) {
-        let stmt = conn.prepare("SELECT jsonStr FROM historyTracks ORDER BY playtime DESC LIMIT 1");
-        match stmt {
-            Ok(mut stmt) => {
-                if let Ok(state) = stmt.next() {
-                    match state {
-                        sqlite::State::Row => match stmt.read::<String, _>(0) {
-                            Ok(x) => {
-                                let json = serde_json::from_str::<Value>(&x);
-                                let new_val = json.ok().map(|x| {
-                                    let album = x.get("album").unwrap();
-                                    let album_name =
-                                        album.get("name").unwrap().as_str().unwrap().to_string();
-                                    let thumbnail =
-                                        album.get("picUrl").unwrap().as_str().unwrap().to_string();
-                                    let artists = x.get("artists").unwrap().as_array().unwrap();
-                                    let mut artists_vec = Vec::with_capacity(artists.len());
-                                    for i in artists {
-                                        artists_vec.push(
-                                            i.get("name").unwrap().as_str().unwrap().to_string(),
-                                        );
-                                    }
-                                    let duration = x.get("duration").unwrap().as_i64().unwrap();
-                                    let name = x.get("name").unwrap().as_str().unwrap().to_string();
-                                    let id =
-                                        x.get("id").unwrap().as_str().unwrap().parse().unwrap_or(0);
-                                    Music {
-                                        album: album_name,
-                                        aliases: x
-                                            .get("alias")
-                                            .map(|x| {
-                                                x.as_array()
-                                                    .unwrap()
-                                                    .iter()
-                                                    .map(|x| x.as_str().unwrap().to_string())
-                                                    .collect()
-                                            })
-                                            .and_then(
-                                                |x: Vec<String>| {
-                                                    if x.is_empty() {
-                                                        None
-                                                    } else {
-                                                        Some(x)
-                                                    }
-                                                },
-                                            ),
-                                        thumbnail,
-                                        artists: artists_vec,
-                                        id,
-                                        duration,
-                                        name,
-                                    }
-                                });
-                                if new_val != *music.borrow() {
-                                    println!(
-                                        "Music changed to {}",
-                                        if let Some(music) = new_val.as_ref() {
-                                            format!(
-                                                "{}{} - {} ({})",
-                                                music.name,
-                                                if music.aliases.is_none() {
-                                                    "".to_string()
-                                                } else {
-                                                    format!(
-                                                        " [{}]",
-                                                        music.aliases.as_ref().unwrap().join("/")
-                                                    )
-                                                },
-                                                music.artists.join(", "),
-                                                music.id
-                                            )
-                                        } else {
-                                            "*no music*".to_string()
-                                        }
-                                    );
-                                    let _ = music.send(new_val);
-                                }
-                            }
-                            Err(err) => eprintln!("Unable to read data: {}", err),
-                        },
-                        _ => {
-                            println!("No music has been played.")
-                        }
-                    }
-                }
-            }
-            Err(err) => {
-                if let Some(code) = err.code {
-                    if code == 5 {
-                        // db is locked
-                        std::thread::sleep(Duration::from_millis(50));
-                        update_music(file_path, music); // try again
-                        return;
-                    }
-                }
-                eprintln!("Unable to read from database");
-            }
+fn update_music(conn: &Connection, music: &Sender<Option<Music>>) {
+    let json_str: String = {
+        let Ok(json_str) = conn.query_row(
+            "SELECT jsonStr FROM historyTracks ORDER BY playtime DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        ) else {
+            println!("Unable to read the database.");
+            return;
+        };
+        json_str
+    };
+
+    let json = serde_json::from_str::<Value>(&json_str);
+    let new_val = json.ok().map(|x| {
+        let album = x.get("album").unwrap();
+        let album_name = album.get("name").unwrap().as_str().unwrap().to_string();
+        let thumbnail = album.get("picUrl").unwrap().as_str().unwrap().to_string();
+        let artists = x.get("artists").unwrap().as_array().unwrap();
+        let mut artists_vec = Vec::with_capacity(artists.len());
+        for i in artists {
+            artists_vec.push(i.get("name").unwrap().as_str().unwrap().to_string());
         }
+        let duration = x.get("duration").unwrap().as_i64().unwrap();
+        let name = x.get("name").unwrap().as_str().unwrap().to_string();
+        let id = x.get("id").unwrap().as_str().unwrap().parse().unwrap_or(0);
+        Music {
+            album: album_name,
+            aliases: x
+                .get("alias")
+                .map(|x| {
+                    x.as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|x| x.as_str().unwrap().to_string())
+                        .collect()
+                })
+                .and_then(|x: Vec<String>| if x.is_empty() { None } else { Some(x) }),
+            thumbnail,
+            artists: artists_vec,
+            id,
+            duration,
+            name,
+        }
+    });
+    if new_val != *music.borrow() {
+        println!(
+            "Music changed to {}",
+            if let Some(music) = new_val.as_ref() {
+                format!(
+                    "{}{} - {} ({})",
+                    music.name,
+                    if music.aliases.is_none() {
+                        "".to_string()
+                    } else {
+                        format!(" [{}]", music.aliases.as_ref().unwrap().join("/"))
+                    },
+                    music.artists.join(", "),
+                    music.id
+                )
+            } else {
+                "*no music*".to_string()
+            }
+        );
+        let _ = music.send(new_val);
     }
 }
 
@@ -253,9 +216,9 @@ pub fn music_monitor(music: Sender<Option<Music>>) {
         .expect("Unable to get path of library.")
         .to_string();
     let netease_webdb_file = format!("{}{}", netease_library_dir, "\\webdb.dat");
-    let netease_webdb_file_clone = netease_webdb_file.clone();
-    let music_clone = music.clone();
+    let conn = Connection::open(&netease_webdb_file).expect("Failed to open the database.");
     std::thread::spawn(move || {
+        update_music(&conn, &music);
         unsafe {
             let dir = CreateFileW(
                 PCWSTR(HSTRING::from(&netease_library_dir).as_ptr()),
@@ -284,34 +247,27 @@ pub fn music_monitor(music: Sender<Option<Music>>) {
                     continue;
                 };
 
-                let mut offset = 0;
                 loop {
-                    let next_entry_offset = buffer[offset];
-                    let action = buffer[offset + 1];
+                    let next_entry_offset = buffer[0];
+                    let action = buffer[1];
                     if action == FILE_ACTION_MODIFIED.0 {
-                        let filename_len = buffer[offset + 2] as usize / std::mem::size_of::<u16>();
+                        let filename_len = buffer[2] as usize / size_of::<u16>();
                         let filename = String::from_utf16_lossy(std::slice::from_raw_parts(
-                            buffer[offset + 3..offset + 3 + filename_len].as_ptr() as *const u16,
+                            buffer[3..3 + filename_len].as_ptr() as *const u16,
                             filename_len,
                         ));
-                        if filename == "webdb.dat" {
-                            std::thread::sleep(Duration::from_millis(10)); // avoid conflict with cloudmusic
-                            update_music(&netease_webdb_file, &music);
+                        if filename.starts_with("webdb.dat") {
+                            std::thread::sleep(Duration::from_millis(50));
+                            update_music(&conn, &music);
                         }
                     }
                     if next_entry_offset == 0 {
                         break;
                     } else {
-                        offset = next_entry_offset as usize;
+                        buffer = buffer.iter().skip(next_entry_offset as usize / size_of::<u32>()).cloned().collect();
                     }
                 }
             }
-        }
-    });
-    std::thread::spawn(move || {
-        loop {
-            update_music(&netease_webdb_file_clone, &music_clone);
-            std::thread::sleep(Duration::from_secs(10)); // fallback check
         }
     });
 }
