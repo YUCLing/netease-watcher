@@ -247,6 +247,7 @@ pub fn music_monitor(music: Sender<Option<Music>>) {
                     continue;
                 };
 
+                let mut buffer = buffer.clone(); // make a copy of data.
                 loop {
                     let next_entry_offset = buffer[0];
                     let action = buffer[1];
