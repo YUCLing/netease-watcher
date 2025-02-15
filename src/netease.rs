@@ -5,7 +5,7 @@ use serde_json::Value;
 use windows::{
     core::{HSTRING, PCWSTR},
     Win32::{
-        Foundation::{GetLastError, HMODULE, MAX_PATH},
+        Foundation::{HMODULE, MAX_PATH},
         Storage::FileSystem::{
             CreateFileW, ReadDirectoryChangesW, FILE_ACTION_MODIFIED, FILE_FLAG_BACKUP_SEMANTICS,
             FILE_LIST_DIRECTORY, FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ,
@@ -41,15 +41,13 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                 let mut process_ids = [0; 8192];
                 let mut cb_needed: u32 = 0;
 
-                let ret = EnumProcesses(
+                let Ok(_) = EnumProcesses(
                     process_ids.as_mut_ptr(),
                     process_ids.len() as u32,
                     &mut cb_needed,
-                );
-
-                if ret.is_err() {
+                ) else {
                     continue;
-                }
+                };
 
                 let count = cb_needed as usize / size_of::<u32>();
                 'process: for pid in process_ids.iter().take(count) {
@@ -63,9 +61,9 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
 
                     if len == 0 {
                         println!(
-                            "Failed to find process name for {} ({:?})",
+                            "Failed to find process name for {} ({})",
                             pid,
-                            GetLastError()
+                            windows::core::Error::from_win32().message()
                         );
                         continue;
                     }
@@ -82,7 +80,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                     let Ok(_) = EnumProcessModulesEx(
                         proc,
                         process_modules.as_mut_ptr(),
-                        512,
+                        process_modules.len() as u32,
                         &mut cb_needed,
                         LIST_MODULES_ALL,
                     ) else {
@@ -91,7 +89,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
 
                     let count = cb_needed as usize / size_of::<HMODULE>();
                     for hmod in process_modules.iter().take(count) {
-                        let mut base_name = vec![0; MAX_PATH.try_into().unwrap()];
+                        let mut base_name = [0; MAX_PATH as usize];
                         let len = GetModuleBaseNameW(proc, *hmod, &mut base_name);
                         if len == 0 {
                             let err = windows::core::Error::from_win32();
@@ -99,7 +97,11 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                                 // process exited
                                 continue 'process;
                             }
-                            println!("Failed to find module name for {} ({:?})", file_name, err.message());
+                            println!(
+                                "Failed to find module name for {} ({})",
+                                file_name,
+                                err.message()
+                            );
                             continue;
                         }
 
@@ -113,6 +115,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                         else {
                             continue;
                         };
+                        std::mem::drop(file_name);
 
                         // found addr of the play progress
                         let mut last_val = -1.0;
@@ -205,16 +208,18 @@ fn update_music(conn: &Connection, music: &Sender<Option<Music>>) {
 }
 
 pub fn music_monitor(music: Sender<Option<Music>>) {
-    let app_data_path = unsafe {
-        let path = SHGetKnownFolderPath(&FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG(0), None)
-            .expect("Unable to fetch AppData path.");
-        path.to_string().expect("Unable to call Windows API.")
-    };
-    let netease_library_dir = Path::new(&app_data_path)
+    let netease_library_dir = {
+        let app_data_path = unsafe {
+            let path = SHGetKnownFolderPath(&FOLDERID_LocalAppData, KNOWN_FOLDER_FLAG(0), None)
+                .expect("Unable to fetch AppData path.");
+            path.to_string().expect("Unable to call Windows API.")
+        };
+        Path::new(&app_data_path)
         .join("NetEase\\CloudMusic\\Library")
         .to_str()
         .expect("Unable to get path of library.")
-        .to_string();
+        .to_string()
+    };
     let netease_webdb_file = format!("{}{}", netease_library_dir, "\\webdb.dat");
     let conn = Connection::open(&netease_webdb_file).expect("Failed to open the database.");
     std::thread::spawn(move || {
@@ -230,14 +235,15 @@ pub fn music_monitor(music: Sender<Option<Music>>) {
                 None,
             )
             .expect("Unable to obtain library dir.");
-            let mut buffer: Vec<u32> = vec![0; 1024];
+            std::mem::drop(netease_library_dir);
+            let mut buffer = [0; 1024];
             let mut bytes_returned = 0;
 
             loop {
                 let Ok(_) = ReadDirectoryChangesW(
                     dir,
                     buffer.as_mut_ptr() as *mut c_void,
-                    1024,
+                    buffer.len() as u32,
                     false,
                     FILE_NOTIFY_CHANGE_LAST_WRITE,
                     Some(&mut bytes_returned),
@@ -247,7 +253,13 @@ pub fn music_monitor(music: Sender<Option<Music>>) {
                     continue;
                 };
 
-                let mut buffer = buffer.clone(); // make a copy of data.
+                if bytes_returned == 0 {
+                    // buffer is too small, update the music directly.
+                    update_music(&conn, &music);
+                    continue;
+                }
+
+                let mut buffer = &buffer[..];
                 loop {
                     let next_entry_offset = buffer[0];
                     let action = buffer[1];
@@ -265,7 +277,7 @@ pub fn music_monitor(music: Sender<Option<Music>>) {
                     if next_entry_offset == 0 {
                         break;
                     } else {
-                        buffer = buffer.iter().skip(next_entry_offset as usize / size_of::<u32>()).cloned().collect();
+                        buffer = &buffer[next_entry_offset as usize / size_of::<u32>()..];
                     }
                 }
             }

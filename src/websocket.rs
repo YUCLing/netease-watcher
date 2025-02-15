@@ -14,8 +14,7 @@ pub async fn ws_handler(
     State(state): State<crate::State>,
 ) -> impl IntoResponse {
     println!("New WebSocket connection");
-    let time_rx = state.0.clone();
-    let music_rx = state.1.clone();
+    let crate::State(time_rx, music_rx) = state.clone();
     ws.on_upgrade(move |socket| handle_socket(socket, time_rx, music_rx))
 }
 
