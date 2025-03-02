@@ -3,6 +3,7 @@ use serde::Serialize;
 use tokio::sync::watch::{self, Receiver};
 
 mod netease;
+mod process;
 mod util;
 mod websocket;
 

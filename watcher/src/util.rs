@@ -34,7 +34,7 @@ pub fn find_movsd_instructions(process: HANDLE, module_base: usize) -> Option<us
                 if ReadProcessMemory(
                     process,
                     address as _,
-                    buffer.as_mut_ptr() as _,
+                    buffer.as_mut_ptr().cast(),
                     mbi.RegionSize,
                     Some(&mut bytes_read),
                 )
@@ -69,6 +69,15 @@ pub fn find_movsd_instructions(process: HANDLE, module_base: usize) -> Option<us
 
 pub fn read_double_from_addr(process: HANDLE, addr: *mut c_void) -> f64 {
     let mut buf: [u8; 8] = [0; 8];
-    let ret = unsafe { ReadProcessMemory(process, addr, buf.as_mut_ptr() as *mut c_void, 8, None) };
-    ret.map(|_| f64::from_le_bytes(buf)).unwrap_or(-1.0)
+    let ret = unsafe { ReadProcessMemory(process, addr, buf.as_mut_ptr().cast(), 8, None) };
+    ret.map(|_| {
+        let val = f64::from_le_bytes(buf);
+        if val == -1. {
+            // the initial value is 1.0, treat it as a success.
+            0.
+        } else {
+            val
+        }
+    })
+    .unwrap_or(-1.)
 }
