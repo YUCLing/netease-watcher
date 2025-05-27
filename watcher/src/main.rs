@@ -1,9 +1,13 @@
 use axum::{routing::get, Router};
+use logging::{setup_logger, setup_panic_logger_hook};
 use serde::Serialize;
 use tokio::sync::watch::{self, Receiver};
 
+mod logging;
 mod netease;
 mod process;
+#[cfg(feature = "tui")]
+mod tui;
 mod util;
 mod websocket;
 
@@ -30,6 +34,9 @@ async fn main() {
     println!("by YUCLing");
     println!("= cheers! =");
 
+    setup_logger().unwrap();
+    setup_panic_logger_hook();
+
     let (time_tx, time_rx) = watch::channel(-1.0);
     let (music_tx, music_rx) = watch::channel(None);
 
@@ -40,6 +47,8 @@ async fn main() {
         .and_then(|x| x.parse().ok())
         .unwrap_or(3574);
 
+    let endpoint = format!("{}:{}", host, port);
+
     netease::current_time_monitor(time_tx);
     netease::music_monitor(music_tx);
 
@@ -48,10 +57,18 @@ async fn main() {
             .fallback(get(websocket::ws_handler))
             .with_state(State(time_rx, music_rx));
 
-        println!("Starting WebSocket server at {}:{}", host, port);
+        log::info!("Starting WebSocket server at {}", endpoint);
         let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port))
             .await
             .unwrap();
+
+        #[cfg(feature = "tui")]
+        tokio::spawn(async { axum::serve(listener, app).await.unwrap() });
+
+        #[cfg(not(feature = "tui"))]
         axum::serve(listener, app).await.unwrap();
     }
+
+    #[cfg(feature = "tui")]
+    tui::run(endpoint).await;
 }

@@ -1,51 +1,43 @@
-use smallvec::SmallVec;
 use windows_sys::Win32::{
-    Foundation::{GetLastError, BOOL, HWND, LPARAM},
-    UI::WindowsAndMessaging::{EnumWindows, IsIconic, IsWindowVisible, SetForegroundWindow},
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{
+        FindWindowW, GetWindow, IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowPos,
+        GW_HWNDNEXT, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    },
 };
 
-// 枚举窗口的回调函数
-unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    // 从 LPARAM 中获取 Vec<HWND> 的指针
-    let handles = &mut *(lparam as *mut SmallVec<[HWND; 512]>);
+// Shell_TrayWnd\0
+const SHELL_TRAYWND: [u16; 14] = [
+    0x5300, 0x6800, 0x6500, 0x6c00, 0x6c00, 0x5f00, 0x5400, 0x7200, 0x6100, 0x7900, 0x5700, 0x6e00,
+    0x6400, 0x0000,
+];
 
-    // 检查窗口是否可见且未最小化
-    if IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) != 0 {
-        handles.push(hwnd);
-    }
-    1
-}
-
-// 切换焦点到下一个窗口
 pub fn switch_focus(current: HWND) -> Result<(), u32> {
     unsafe {
-        // 存储所有符合条件的窗口句柄
-        let mut handles = SmallVec::<[HWND; 512]>::new();
-
-        // 枚举所有顶层窗口，并将 Vec<HWND> 的指针作为 LPARAM 传递
-        if EnumWindows(Some(enum_callback), &mut handles as *mut _ as isize) == 0 {
-            return Err(GetLastError());
+        let mut target = GetWindow(current, GW_HWNDNEXT);
+        while !target.is_null() {
+            if IsWindowVisible(target) != 0 && IsIconic(target) == 0 {
+                break;
+            }
+            target = GetWindow(target, GW_HWNDNEXT);
         }
 
-        if handles.is_empty() {
-            return Ok(());
+        if target.is_null() {
+            target = FindWindowW(&SHELL_TRAYWND as *const u16, core::ptr::null());
         }
 
-        // 查找当前窗口在列表中的位置
-        let current_pos = handles
-            .iter()
-            .position(|&h| h == current)
-            .unwrap_or(usize::MAX);
-
-        // 计算下一个有效索引（支持循环切换）
-        let target_index = if current_pos == usize::MAX || current_pos + 1 >= handles.len() {
-            0 // 未找到当前窗口或已是最后一个时切到第一个
-        } else {
-            current_pos + 1
-        };
-
-        // 设置焦点到目标窗口
-        let _ = SetForegroundWindow(handles[target_index]);
+        if !target.is_null() {
+            let _ = SetWindowPos(
+                target,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE,
+            );
+            let _ = SetForegroundWindow(target);
+        }
     }
     Ok(())
 }

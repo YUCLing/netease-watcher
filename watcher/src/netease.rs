@@ -1,5 +1,6 @@
 use std::{ffi::c_void, mem::size_of, path::Path, time::Duration};
 
+use chrono::TimeZone;
 use rusqlite::Connection;
 use serde_json::Value;
 use windows::{
@@ -35,7 +36,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
         let mut first = true;
         loop {
             if !first {
-                println!("Unable to find/open Netease Cloud Music process. Next try in 5 secs.");
+                log::info!("Unable to find/open Netease Cloud Music process. Next try in 5 secs.");
                 // no netease found, wait
                 std::thread::sleep(Duration::from_secs(5));
             } else {
@@ -64,7 +65,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                     let len = GetProcessImageFileNameW(proc, &mut file_name);
 
                     if len == 0 {
-                        println!(
+                        log::error!(
                             "Failed to find process name for {} ({})",
                             pid,
                             windows::core::Error::from_win32().message()
@@ -104,7 +105,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                                 // process exited
                                 continue 'process;
                             }
-                            println!(
+                            log::error!(
                                 "Failed to find module name for {} ({})",
                                 file_name,
                                 err.message()
@@ -126,6 +127,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
 
                         // found addr of the play progress
                         let mut hook = Vec::new();
+                        let mut last_hook_attempt = chrono::Utc.timestamp_opt(0, 0).unwrap();
                         let mut last_val = -1.;
                         loop {
                             let val = util::read_double_from_addr(proc, addr as *mut c_void);
@@ -136,11 +138,16 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                                 }
                                 continue 'process; // keep trying other processes
                             }
-                            if last_val == -1. {
-                                println!("Found cloudmusic.exe");
-                            }
-                            if hook.is_empty() {
+                            'hook: {
                                 // optional, improves the detection of music changing
+                                if !hook.is_empty() {
+                                    break 'hook;
+                                }
+                                let now = chrono::Utc::now();
+                                if now.signed_duration_since(last_hook_attempt).num_seconds() < 3 {
+                                    break 'hook;
+                                }
+                                last_hook_attempt = now;
                                 if let Ok(threads) = get_process_thread_ids(*pid) {
                                     let str = HSTRING::from("wndhok.dll");
                                     if let Ok(lib) = LoadLibraryW(PCWSTR(str.as_ptr())) {
@@ -158,16 +165,29 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                                                     hook.push(hhook);
                                                 }
                                             }
+                                            if !hook.is_empty() {
+                                                log::info!(
+                                                    "Successfully hooked into Netease Cloud Music."
+                                                );
+                                            }
                                         }
                                     }
                                 }
                             }
                             if val != last_val {
+                                #[cfg(feature = "tui")]
+                                {
+                                    let mut lck = crate::tui::TUI_MUSIC_TIME.lock().unwrap();
+                                    if lck.round() != val.round() { // reducing the freq of update
+                                        *lck = val;
+                                        crate::tui::TUI_NOTIFY.notify_one();
+                                    }
+                                }
                                 if current_time.send(val).is_ok() {
                                     last_val = val;
                                 }
-                                std::thread::sleep(Duration::from_millis(100));
                             }
+                            std::thread::sleep(Duration::from_millis(50));
                         }
                     }
                 }
@@ -183,7 +203,7 @@ fn update_music(conn: &Connection, music: &Sender<Option<Music>>) {
             [],
             |row| row.get(0),
         ) else {
-            println!("Unable to read the database.");
+            log::error!("Unable to read the database.");
             return;
         };
         json_str
@@ -222,7 +242,7 @@ fn update_music(conn: &Connection, music: &Sender<Option<Music>>) {
         }
     });
     if new_val != *music.borrow() {
-        println!(
+        log::info!(
             "Music changed to {}",
             if let Some(music) = new_val.as_ref() {
                 format!(
@@ -240,6 +260,11 @@ fn update_music(conn: &Connection, music: &Sender<Option<Music>>) {
                 "*no music*".to_string()
             }
         );
+        #[cfg(feature = "tui")]
+        {
+            *crate::tui::TUI_MUSIC.lock().unwrap() = new_val.clone();
+            crate::tui::TUI_NOTIFY.notify_one();
+        }
         let _ = music.send(new_val);
     }
 }
