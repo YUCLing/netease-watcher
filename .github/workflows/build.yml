@@ -30,12 +30,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build
-        run: cargo build ${{ build_parameter }} --verbose
+        run: cargo build ${{ matrix.build_parameter }} --verbose
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: netease-watcher${{ flag_suffix }}${{ inputs.asset_suffix }}
+          name: netease-watcher${{ matrix.flag_suffix }}${{ inputs.asset_suffix }}
           path: |
             target/release/*.pdb
             target/release/*.exe
