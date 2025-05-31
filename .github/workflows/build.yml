@@ -16,14 +16,22 @@ jobs:
     strategy:
       matrix:
         include:
-          - flag_suffix: 
-            build_parameter: --release 
-          - flag_suffix: -debug
+          - name: Release with Text UI
+            flag_suffix: 
+            build_parameter: --release
+            target_folder: release
+          - name: Debug with Text UI
+            flag_suffix: -debug
             build_parameter:
-          - flag_suffix: -no-tui
+            target_folder: debug
+          - name: Release without Text UI
+            flag_suffix: -no-tui
             build_parameter: --release --no-default-features
-          - flag_suffix: -debug-no-tui
+            target_folder: release
+          - name: Debug without Text UI
+            flag_suffix: -debug-no-tui
             build_parameter: --no-default-features
+            target_folder: debug
 
     steps:
       - name: Checkout code
@@ -37,7 +45,7 @@ jobs:
         with:
           name: netease-watcher${{ matrix.flag_suffix }}${{ inputs.asset_suffix }}
           path: |
-            target/release/*.pdb
-            target/release/*.exe
-            target/release/*.dll
+            target/${{ matrix.target_folder }}/*.pdb
+            target/${{ matrix.target_folder }}/*.exe
+            target/${{ matrix.target_folder }}/*.dll
           compression-level: 9
