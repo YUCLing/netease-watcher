@@ -13,18 +13,29 @@ jobs:
   build:
     name: Build
     runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - flag_suffix: 
+            build_parameter: --release 
+          - flag_suffix: -debug
+            build_parameter:
+          - flag_suffix: -no-tui
+            build_parameter: --release --no-default-features
+          - flag_suffix: -debug-no-tui
+            build_parameter: --no-default-features
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Build
-        run: cargo build --release --verbose
+        run: cargo build ${{ build_parameter }} --verbose
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: netease-watcher${{ inputs.asset_suffix }}
+          name: netease-watcher${{ flag_suffix }}${{ inputs.asset_suffix }}
           path: |
             target/release/*.pdb
             target/release/*.exe
