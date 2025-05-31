@@ -16,11 +16,21 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+      
+      - name: Create zip files from artifact folders
+        run: |
+          mkdir -p releases
+          cd artifacts
+          for dir in */; do
+            if [ -d "$dir" ]; then
+              zip -r "../releases/${dir%/}.zip" "$dir"
+            fi
+          done
           
       - name: Upload artifacts to release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/*
+          files: releases/*
           fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
