@@ -9,7 +9,7 @@ mod process;
 #[cfg(feature = "tui")]
 mod tui;
 mod util;
-mod websocket;
+mod server;
 
 #[derive(Clone, Serialize, PartialEq, Debug)]
 pub struct Music {
@@ -40,7 +40,7 @@ async fn main() {
     let (time_tx, time_rx) = watch::channel(-1.0);
     let (music_tx, music_rx) = watch::channel(None);
 
-    let host = std::env::var("HOST").unwrap_or("0.0.0.0".to_string());
+    let host = std::env::var("HOST").unwrap_or("127.0.0.1".to_string());
 
     let port: i32 = std::env::var("PORT")
         .ok()
@@ -54,10 +54,11 @@ async fn main() {
 
     {
         let app = Router::new()
-            .fallback(get(websocket::ws_handler))
+            .route("/ws", get(server::ws_handler))
+            .fallback(get(server::http_handler))
             .with_state(State(time_rx, music_rx));
 
-        log::info!("Starting WebSocket server at {}", endpoint);
+        log::info!("Starting HTTP server at {}", endpoint);
         let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port))
             .await
             .unwrap();

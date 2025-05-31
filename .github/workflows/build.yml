@@ -1,0 +1,32 @@
+name: Build Workflow
+
+on:
+  workflow_call:
+    inputs:
+      asset_suffix:
+        description: 'Suffix to append to asset names'
+        required: false
+        default: ''
+        type: string
+    
+jobs:
+  build:
+    name: Build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --release --verbose
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: netease-watcher${{ inputs.asset_suffix }}
+          path: |
+            target/release/*.pdb
+            target/release/*.exe
+            target/release/*.dll
+          compression-level: 9

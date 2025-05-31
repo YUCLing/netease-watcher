@@ -20,7 +20,7 @@ const MINI_ASCII_ART: &str = r#"  _   ___        __
                    "#;
 
 pub fn render_header(frame: &mut Frame, endpoint: &String, rect: Rect) {
-    let mini = rect.width < 120;
+    let mini = rect.width < 125;
     let layout = Layout::new(
         ratatui::layout::Direction::Horizontal,
         [
@@ -39,11 +39,15 @@ pub fn render_header(frame: &mut Frame, endpoint: &String, rect: Rect) {
         Text::from(vec![
             Line::raw(""),
             Line::from(vec![
-                Span::raw("WebSocket at "),
+                Span::raw("Server at "),
                 Span::raw(endpoint).bold().underlined(),
             ])
             .light_red(),
-            Line::raw(""),
+            Line::from(vec![
+                Span::raw("WebSocket at "),
+                Span::raw("/ws").bold().underlined(),
+                Span::raw(" or any other for HTTP")
+            ]).light_magenta(),
             Line::raw(format!("v{}", env!("CARGO_PKG_VERSION"))).black(),
             Line::raw("by YUCLing@GitHub").black(),
         ])
