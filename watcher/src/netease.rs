@@ -43,7 +43,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                     *crate::tui::TUI_LAST_FIND_TIME.lock().unwrap() = std::time::SystemTime::now();
                 }
                 #[cfg(not(feature = "tui"))]
-                log::info!("Unable to find/open Netease Cloud Music process. Next try in {} secs.", HOOK_RETRY_SECS);
+                log::info!("Unable to find/open Netease Cloud Music process. Next try in {} secs.", FIND_RETRY_SECS);
                 // no netease found, wait
                 std::thread::sleep(Duration::from_secs(FIND_RETRY_SECS));
             } else {
