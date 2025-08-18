@@ -1,6 +1,5 @@
-use std::{ffi::c_void, mem::size_of, path::Path, time::Duration};
+use std::{ffi::c_void, mem::size_of, path::Path, time::{Duration, SystemTime}};
 
-use chrono::TimeZone;
 use rusqlite::Connection;
 use serde_json::Value;
 use windows::{
@@ -31,14 +30,22 @@ use tokio::sync::watch::Sender;
 
 use crate::{process::get_process_thread_ids, util, Music};
 
+pub const FIND_RETRY_SECS: u64 = 5;
+
 pub fn current_time_monitor(current_time: Sender<f64>) {
     std::thread::spawn(move || {
         let mut first = true;
         loop {
             if !first {
-                log::info!("Unable to find/open Netease Cloud Music process. Next try in 5 secs.");
+                #[cfg(feature = "tui")]
+                {
+                    *crate::tui::TUI_FOUND_CM.lock().unwrap() = false;
+                    *crate::tui::TUI_LAST_FIND_TIME.lock().unwrap() = std::time::SystemTime::now();
+                }
+                #[cfg(not(feature = "tui"))]
+                log::info!("Unable to find/open Netease Cloud Music process. Next try in {} secs.", HOOK_RETRY_SECS);
                 // no netease found, wait
-                std::thread::sleep(Duration::from_secs(5));
+                std::thread::sleep(Duration::from_secs(FIND_RETRY_SECS));
             } else {
                 first = false;
             }
@@ -127,7 +134,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
 
                         // found addr of the play progress
                         let mut hook = Vec::new();
-                        let mut last_hook_attempt = chrono::Utc.timestamp_opt(0, 0).unwrap();
+                        let mut last_hook_attempt = SystemTime::UNIX_EPOCH;
                         let mut last_val = -1.;
                         loop {
                             let val = util::read_double_from_addr(proc, addr as *mut c_void);
@@ -143,11 +150,10 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                                 if !hook.is_empty() {
                                     break 'hook;
                                 }
-                                let now = chrono::Utc::now();
-                                if now.signed_duration_since(last_hook_attempt).num_seconds() < 3 {
+                                if last_hook_attempt.elapsed().unwrap().as_secs() < 3 {
                                     break 'hook;
                                 }
-                                last_hook_attempt = now;
+                                last_hook_attempt = SystemTime::now();
                                 if let Ok(threads) = get_process_thread_ids(*pid) {
                                     let str = HSTRING::from("wndhok.dll");
                                     if let Ok(lib) = LoadLibraryW(PCWSTR(str.as_ptr())) {
@@ -166,6 +172,10 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                                                 }
                                             }
                                             if !hook.is_empty() {
+                                                #[cfg(feature = "tui")]
+                                                {
+                                                    *crate::tui::TUI_FOUND_CM.lock().unwrap() = true;
+                                                }
                                                 log::info!(
                                                     "Successfully hooked into Netease Cloud Music."
                                                 );

@@ -1,6 +1,6 @@
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use lazy_static::lazy_static;
@@ -23,6 +23,8 @@ lazy_static! {
     pub static ref TUI_NOTIFY: Arc<Notify> = Arc::new(Notify::new());
     pub static ref TUI_MUSIC: Arc<Mutex<Option<Music>>> = Arc::new(Mutex::new(None));
     pub static ref TUI_MUSIC_TIME: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.));
+    pub static ref TUI_FOUND_CM: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    pub static ref TUI_LAST_FIND_TIME: Arc<Mutex<SystemTime>> = Arc::new(Mutex::new(SystemTime::now()));
 }
 
 struct State<'a> {
@@ -149,7 +151,12 @@ pub async fn run(endpoint: String) {
             .draw(|f| render(f, &state, &mut rendered_state))
             .unwrap();
         async fn term_event() -> std::io::Result<Event> {
+            let notify = TUI_NOTIFY.clone();
             loop {
+                // for finder countdown updating
+                if !*TUI_FOUND_CM.lock().unwrap() {
+                    notify.notify_one();
+                }
                 if event::poll(Duration::from_secs(0)).unwrap() {
                     return event::read();
                 } else {

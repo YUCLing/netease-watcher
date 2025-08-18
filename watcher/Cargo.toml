@@ -1,6 +1,6 @@
 [package]
 name = "netease-watcher"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 
 [features]
@@ -10,18 +10,18 @@ tui = []
 
 [dependencies]
 ansi-to-tui = "7.0.0"
-axum = { version = "0.8.1", features = ["ws"] }
-chrono = "0.4.40"
+axum = { version = "0.8.4", features = ["ws"] }
+chrono = "0.4.41"
 crossterm = "0.29.0"
 fern = { version = "0.7.1", features = ["colored"] }
-lazy_static = "1.5.0"
+lazy_static.workspace = true
 lightningscanner = "1.0.2"
-log = "0.4.26"
+log = "0.4.27"
 ratatui = { version = "0.29.0", features = ["unstable-rendered-line-info"] }
-rusqlite = { version = "0.36.0", features = ["bundled"] }
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0.139"
-tokio = { version = "1.45.1", features = ["full"] }
+serde_json = "1.0"
+tokio = { version = "1.47.1", features = ["full"] }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

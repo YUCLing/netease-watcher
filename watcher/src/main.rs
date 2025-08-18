@@ -59,7 +59,7 @@ async fn main() {
             .with_state(State(time_rx, music_rx));
 
         log::info!("Starting HTTP server at {}", endpoint);
-        let listener = tokio::net::TcpListener::bind(format!("{}:{}", host, port))
+        let listener = tokio::net::TcpListener::bind(&endpoint)
             .await
             .unwrap();
 
