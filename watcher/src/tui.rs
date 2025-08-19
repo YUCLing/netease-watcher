@@ -1,6 +1,6 @@
 use std::{
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+    time::{Duration, Instant},
 };
 
 use lazy_static::lazy_static;
@@ -24,7 +24,7 @@ lazy_static! {
     pub static ref TUI_MUSIC: Arc<Mutex<Option<Music>>> = Arc::new(Mutex::new(None));
     pub static ref TUI_MUSIC_TIME: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.));
     pub static ref TUI_FOUND_CM: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
-    pub static ref TUI_LAST_FIND_TIME: Arc<Mutex<SystemTime>> = Arc::new(Mutex::new(SystemTime::now()));
+    pub static ref TUI_LAST_FIND_TIME: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
 }
 
 struct State<'a> {

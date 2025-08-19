@@ -43,7 +43,7 @@ pub fn render_header(frame: &mut Frame, endpoint: &String, rect: Rect) {
             Line::raw("Found Netease Cloud Music").green()
         } else {
             let duration = Duration::from_secs(FIND_RETRY_SECS);
-            let elapsed = TUI_LAST_FIND_TIME.lock().unwrap().elapsed().unwrap();
+            let elapsed = TUI_LAST_FIND_TIME.lock().unwrap().elapsed();
             Line::raw(format!("Next try to find Cloud Music in {:.1} secs", duration.checked_sub(elapsed).unwrap_or(Duration::ZERO).as_secs_f32())).red().bold()
         },
         Line::raw(format!("v{} by YUCLing@GitHub", env!("CARGO_PKG_VERSION"))).black(),

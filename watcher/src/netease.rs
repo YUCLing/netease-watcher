@@ -1,4 +1,4 @@
-use std::{ffi::c_void, mem::size_of, path::Path, time::{Duration, SystemTime}};
+use std::{ffi::c_void, mem::size_of, path::Path, time::{Duration, Instant}};
 
 use rusqlite::Connection;
 use serde_json::Value;
@@ -126,7 +126,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                         }
 
                         let mut hook = Vec::new();
-                        let mut last_hook_attempt = SystemTime::UNIX_EPOCH;
+                        let mut last_hook_attempt = Instant::now().checked_sub(Duration::from_secs(HOOK_COOLDOWN)).unwrap();
                         let mut last_val = -1.;
                         loop {
                             let val = util::read_double_from_addr(proc, addr as *mut c_void);
@@ -140,11 +140,11 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                             'hook: {
                                 // optional, improves the detection of music changing
                                 if !hook.is_empty() ||
-                                    last_hook_attempt.elapsed().unwrap().as_secs() < HOOK_COOLDOWN
+                                    last_hook_attempt.elapsed().as_secs() < HOOK_COOLDOWN
                                 {
                                     break 'hook;
                                 }
-                                last_hook_attempt = SystemTime::now();
+                                last_hook_attempt = Instant::now();
                                 let Ok(threads) = get_process_thread_ids(*pid) else {
                                     break 'hook;
                                 };
@@ -193,7 +193,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
             #[cfg(feature = "tui")]
             {
                 *crate::tui::TUI_FOUND_CM.lock().unwrap() = false;
-                *crate::tui::TUI_LAST_FIND_TIME.lock().unwrap() = std::time::SystemTime::now();
+                *crate::tui::TUI_LAST_FIND_TIME.lock().unwrap() = std::time::Instant::now();
             }
             #[cfg(not(feature = "tui"))]
             log::info!("Unable to find/open Netease Cloud Music process. Next try in {} secs.", FIND_RETRY_SECS);
