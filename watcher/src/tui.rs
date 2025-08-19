@@ -150,22 +150,25 @@ pub async fn run(endpoint: String) {
         terminal
             .draw(|f| render(f, &state, &mut rendered_state))
             .unwrap();
-        async fn term_event() -> std::io::Result<Event> {
+        async fn poller() -> std::io::Result<Event> {
             let notify = TUI_NOTIFY.clone();
             loop {
-                // for finder countdown updating
-                if !*TUI_FOUND_CM.lock().unwrap() {
-                    notify.notify_one();
-                }
                 if event::poll(Duration::from_secs(0)).unwrap() {
                     return event::read();
                 } else {
+                    // no term event yet, see if other things need a update.
+ 
+                    // finder countdown updating
+                    if !*TUI_FOUND_CM.lock().unwrap() {
+                        notify.notify_one();
+                    }
+
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
             }
         }
         tokio::select! {
-            event = term_event() => {
+            event = poller() => {
                 let event = event.unwrap();
                 match event {
                     Event::Key(KeyEvent { code, modifiers: _, kind: _, state: _ }) => {
