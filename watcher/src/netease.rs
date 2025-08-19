@@ -31,25 +31,12 @@ use tokio::sync::watch::Sender;
 use crate::{process::get_process_thread_ids, util, Music};
 
 pub const FIND_RETRY_SECS: u64 = 5;
+pub const HOOK_COOLDOWN: u64 = 3;
 
 pub fn current_time_monitor(current_time: Sender<f64>) {
-    std::thread::spawn(move || {
-        let mut first = true;
+    std::thread::spawn(move || unsafe {
         loop {
-            if !first {
-                #[cfg(feature = "tui")]
-                {
-                    *crate::tui::TUI_FOUND_CM.lock().unwrap() = false;
-                    *crate::tui::TUI_LAST_FIND_TIME.lock().unwrap() = std::time::SystemTime::now();
-                }
-                #[cfg(not(feature = "tui"))]
-                log::info!("Unable to find/open Netease Cloud Music process. Next try in {} secs.", FIND_RETRY_SECS);
-                // no netease found, wait
-                std::thread::sleep(Duration::from_secs(FIND_RETRY_SECS));
-            } else {
-                first = false;
-            }
-            unsafe {
+            'find_netease: {
                 let mut process_ids = [0; 8192];
                 let mut cb_needed: u32 = 0;
 
@@ -58,7 +45,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                     process_ids.len() as u32,
                     &mut cb_needed,
                 ) else {
-                    continue;
+                    break 'find_netease;
                 };
 
                 let count = cb_needed as usize / size_of::<u32>();
@@ -133,6 +120,11 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                         std::mem::drop(file_name);
 
                         // found addr of the play progress
+                        #[cfg(feature = "tui")]
+                        {
+                            *crate::tui::TUI_FOUND_CM.lock().unwrap() = true;
+                        }
+
                         let mut hook = Vec::new();
                         let mut last_hook_attempt = SystemTime::UNIX_EPOCH;
                         let mut last_val = -1.;
@@ -147,41 +139,37 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                             }
                             'hook: {
                                 // optional, improves the detection of music changing
-                                if !hook.is_empty() {
-                                    break 'hook;
-                                }
-                                if last_hook_attempt.elapsed().unwrap().as_secs() < 3 {
+                                if !hook.is_empty() ||
+                                    last_hook_attempt.elapsed().unwrap().as_secs() < HOOK_COOLDOWN
+                                {
                                     break 'hook;
                                 }
                                 last_hook_attempt = SystemTime::now();
-                                if let Ok(threads) = get_process_thread_ids(*pid) {
-                                    let str = HSTRING::from("wndhok.dll");
-                                    if let Ok(lib) = LoadLibraryW(PCWSTR(str.as_ptr())) {
-                                        if let Some(proc) =
-                                            GetProcAddress(lib, PCSTR(c"CBTProc".as_ptr().cast()))
-                                        {
-                                            let proc = std::mem::transmute::<unsafe extern "system" fn() -> isize, unsafe extern "system" fn(i32, windows::Win32::Foundation::WPARAM, windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT>(proc);
-                                            for thread in threads {
-                                                if let Ok(hhook) = SetWindowsHookExW(
-                                                    WH_CBT,
-                                                    Some(proc),
-                                                    Some(lib.into()),
-                                                    thread,
-                                                ) {
-                                                    hook.push(hhook);
-                                                }
-                                            }
-                                            if !hook.is_empty() {
-                                                #[cfg(feature = "tui")]
-                                                {
-                                                    *crate::tui::TUI_FOUND_CM.lock().unwrap() = true;
-                                                }
-                                                log::info!(
-                                                    "Successfully hooked into Netease Cloud Music."
-                                                );
-                                            }
-                                        }
+                                let Ok(threads) = get_process_thread_ids(*pid) else {
+                                    break 'hook;
+                                };
+                                let hook_lib_name = HSTRING::from("wndhok.dll");
+                                let Ok(lib) = LoadLibraryW(PCWSTR(hook_lib_name.as_ptr())) else {
+                                    break 'hook;
+                                };
+                                let Some(proc) = GetProcAddress(lib, PCSTR(c"CBTProc".as_ptr().cast())) else {
+                                    break 'hook;
+                                };
+                                let proc = std::mem::transmute::<unsafe extern "system" fn() -> isize, unsafe extern "system" fn(i32, windows::Win32::Foundation::WPARAM, windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT>(proc);
+                                for thread in threads {
+                                    if let Ok(hhook) = SetWindowsHookExW(
+                                        WH_CBT,
+                                        Some(proc),
+                                        Some(lib.into()),
+                                        thread,
+                                    ) {
+                                        hook.push(hhook);
                                     }
+                                }
+                                if !hook.is_empty() {
+                                    log::info!(
+                                        "Successfully hooked into Netease Cloud Music."
+                                    );
                                 }
                             }
                             if val != last_val {
@@ -202,6 +190,15 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                     }
                 }
             }
+            #[cfg(feature = "tui")]
+            {
+                *crate::tui::TUI_FOUND_CM.lock().unwrap() = false;
+                *crate::tui::TUI_LAST_FIND_TIME.lock().unwrap() = std::time::SystemTime::now();
+            }
+            #[cfg(not(feature = "tui"))]
+            log::info!("Unable to find/open Netease Cloud Music process. Next try in {} secs.", FIND_RETRY_SECS);
+            // no netease found, wait
+            std::thread::sleep(Duration::from_secs(FIND_RETRY_SECS));
         }
     });
 }
