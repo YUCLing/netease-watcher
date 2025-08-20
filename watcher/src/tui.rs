@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::Stylize,
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
 use tokio::sync::Notify;
@@ -29,7 +29,8 @@ lazy_static! {
 
 struct State<'a> {
     endpoint: &'a String,
-    scroll_offset: u16,
+    log_scroll_state: ScrollbarState,
+    log_scroll: usize
 }
 
 #[derive(Default)]
@@ -39,7 +40,7 @@ struct RenderedState {
     exit_button_area: Rect,
 }
 
-fn render(frame: &mut Frame, state: &State, rendered_state: &mut RenderedState) {
+fn render(frame: &mut Frame, state: &mut State, rendered_state: &mut RenderedState) {
     let layout = Layout::new(
         ratatui::layout::Direction::Vertical,
         [
@@ -51,23 +52,32 @@ fn render(frame: &mut Frame, state: &State, rendered_state: &mut RenderedState) 
     .split(frame.area());
     header::render_header(frame, state.endpoint, layout[0]);
     {
-        let mut paragraph = {
-            let buf = logger::LOG_TEXT.lock().unwrap();
-            Paragraph::new(buf.clone()).wrap(Wrap { trim: true })
-        };
-        let line_count = paragraph.line_count(layout[1].width);
-        if state.scroll_offset == u16::MAX {
-            // stick to bottom
-            if line_count as u16 > layout[1].height {
-                let offset = line_count as u16 - layout[1].height;
-                paragraph = paragraph.scroll((offset, 0));
-            }
-        } else {
-            paragraph = paragraph.scroll((state.scroll_offset, 0));
-        }
+        // auto scroll:
+        // 1. end of log was inside viewport
+        // 2. new log size exceeds viewport
+        let auto_scroll_pre_cond = state.log_scroll < rendered_state.total_log_lines &&
+            rendered_state.total_log_lines <= state.log_scroll + rendered_state.log_area_height as usize;
         rendered_state.log_area_height = layout[1].height;
-        rendered_state.total_log_lines = line_count;
+        let paragraph = {
+            let buf = logger::LOG_TEXT.lock().unwrap();
+            let p = Paragraph::new(buf.clone()).wrap(Wrap { trim: true });
+            rendered_state.total_log_lines = p.line_count(layout[1].width - 1);
+            if auto_scroll_pre_cond && rendered_state.total_log_lines > state.log_scroll + layout[1].height as usize {
+                // auto scroll to make sure last log item is at the bottom of viewport
+                state.log_scroll = rendered_state.total_log_lines.saturating_sub(layout[1].height as usize);
+                state.log_scroll_state = state.log_scroll_state.position(state.log_scroll);
+            }
+            state.log_scroll_state = state.log_scroll_state
+                .content_length(rendered_state.total_log_lines)
+                .viewport_content_length(layout[1].height as usize);
+            p.block(Block::new().borders(Borders::RIGHT)).scroll((state.log_scroll as u16, 0))
+        };
         frame.render_widget(paragraph, layout[1]);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight),
+            layout[1],
+            &mut state.log_scroll_state
+        );
     }
     {
         let mut music_info_line = Line::raw(" ").black().on_white();
@@ -127,10 +137,23 @@ fn render(frame: &mut Frame, state: &State, rendered_state: &mut RenderedState) 
     }
 }
 
+fn scroll_down(state: &mut State, rendered_state: &mut RenderedState) {
+    let next_scroll = state.log_scroll.saturating_add(1);
+    if next_scroll < rendered_state.total_log_lines {
+        state.log_scroll = next_scroll;
+        state.log_scroll_state = state.log_scroll_state.position(state.log_scroll);
+    }
+}
+fn scroll_up(state: &mut State) {
+    state.log_scroll = state.log_scroll.saturating_sub(1);
+    state.log_scroll_state = state.log_scroll_state.position(state.log_scroll);
+}
+
 pub async fn run(endpoint: String) {
     let mut state = State {
         endpoint: &endpoint,
-        scroll_offset: u16::MAX,
+        log_scroll_state: Default::default(),
+        log_scroll: 0
     };
     let mut rendered_state = RenderedState::default();
 
@@ -145,10 +168,10 @@ pub async fn run(endpoint: String) {
     let mut exit_btn_hold = false;
     let notify = TUI_NOTIFY.clone();
     loop {
-        use crossterm::event::{self, Event, KeyCode, KeyEvent, MouseEvent, MouseEventKind};
+        use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 
         terminal
-            .draw(|f| render(f, &state, &mut rendered_state))
+            .draw(|f| render(f, &mut state, &mut rendered_state))
             .unwrap();
         async fn poller() -> std::io::Result<Event> {
             let notify = TUI_NOTIFY.clone();
@@ -171,9 +194,18 @@ pub async fn run(endpoint: String) {
             event = poller() => {
                 let event = event.unwrap();
                 match event {
-                    Event::Key(KeyEvent { code, modifiers: _, kind: _, state: _ }) => {
-                        if code == KeyCode::Esc {
-                            break;
+                    Event::Key(KeyEvent { code, modifiers: _, kind, state: _ }) => {
+                        match code {
+                            KeyCode::Down if kind == KeyEventKind::Press => {
+                                scroll_down(&mut state, &mut rendered_state);
+                            },
+                            KeyCode::Up if kind == KeyEventKind::Press => {
+                                scroll_up(&mut state);
+                            },
+                            KeyCode::Esc => {
+                                break;
+                            },
+                            _ => {}
                         }
                     }
                     Event::Mouse(MouseEvent { kind, column, row, modifiers: _ }) => {
@@ -190,39 +222,19 @@ pub async fn run(endpoint: String) {
                                 exit_btn_hold = false;
                             }
                             MouseEventKind::ScrollDown => {
-                                if state.scroll_offset == u16::MAX {
-                                    // it's at the bottom, don't scroll down
-                                    continue;
-                                }
-                                if rendered_state.total_log_lines >= (state.scroll_offset + rendered_state.log_area_height) as usize {
-                                    // not at the bottom and it's overflowing
-                                    state.scroll_offset += 1;
-                                } else {
-                                    // at the bottom, make it stick to bottom
-                                    state.scroll_offset = u16::MAX;
-                                }
+                                scroll_down(&mut state, &mut rendered_state);
                             }
                             MouseEventKind::ScrollUp => {
-                                if state.scroll_offset > 0 {
-                                    // not at the top
-                                    if state.scroll_offset == u16::MAX {
-                                        // we're at the bottom
-                                        if rendered_state.total_log_lines > rendered_state.log_area_height as usize {
-                                            // make sure we have enough space to engage a scroll up
-                                            state.scroll_offset = rendered_state.total_log_lines as u16 - rendered_state.log_area_height;
-                                        }
-                                    } else {
-                                        // just simply scroll up
-                                        state.scroll_offset -= 1;
-                                    }
-                                }
+                                scroll_up(&mut state);
                             }
                             _ => {}
                         }
                     }
                     Event::Resize(_w, _h) => {
-                        // reset the scrollbar to the bottom. we will need a better handling of this.
-                        state.scroll_offset = u16::MAX;
+                        if state.log_scroll >= rendered_state.total_log_lines {
+                            state.log_scroll = rendered_state.total_log_lines.saturating_sub(1);
+                            state.log_scroll_state = state.log_scroll_state.position(state.log_scroll);
+                        }
                     }
                     _ => {}
                 }
