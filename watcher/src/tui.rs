@@ -30,7 +30,7 @@ lazy_static! {
 struct State<'a> {
     endpoint: &'a String,
     log_scroll_state: ScrollbarState,
-    log_scroll: usize
+    log_scroll: usize,
 }
 
 #[derive(Default)]
@@ -55,28 +55,35 @@ fn render(frame: &mut Frame, state: &mut State, rendered_state: &mut RenderedSta
         // auto scroll:
         // 1. end of log was inside viewport
         // 2. new log size exceeds viewport
-        let auto_scroll_pre_cond = state.log_scroll < rendered_state.total_log_lines &&
-            rendered_state.total_log_lines <= state.log_scroll + rendered_state.log_area_height as usize;
+        let auto_scroll_pre_cond = state.log_scroll < rendered_state.total_log_lines
+            && rendered_state.total_log_lines
+                <= state.log_scroll + rendered_state.log_area_height as usize;
         rendered_state.log_area_height = layout[1].height;
         let paragraph = {
             let buf = logger::LOG_TEXT.lock().unwrap();
             let p = Paragraph::new(buf.clone()).wrap(Wrap { trim: true });
             rendered_state.total_log_lines = p.line_count(layout[1].width - 1);
-            if auto_scroll_pre_cond && rendered_state.total_log_lines > state.log_scroll + layout[1].height as usize {
+            if auto_scroll_pre_cond
+                && rendered_state.total_log_lines > state.log_scroll + layout[1].height as usize
+            {
                 // auto scroll to make sure last log item is at the bottom of viewport
-                state.log_scroll = rendered_state.total_log_lines.saturating_sub(layout[1].height as usize);
+                state.log_scroll = rendered_state
+                    .total_log_lines
+                    .saturating_sub(layout[1].height as usize);
                 state.log_scroll_state = state.log_scroll_state.position(state.log_scroll);
             }
-            state.log_scroll_state = state.log_scroll_state
+            state.log_scroll_state = state
+                .log_scroll_state
                 .content_length(rendered_state.total_log_lines)
                 .viewport_content_length(layout[1].height as usize);
-            p.block(Block::new().borders(Borders::RIGHT)).scroll((state.log_scroll as u16, 0))
+            p.block(Block::new().borders(Borders::RIGHT))
+                .scroll((state.log_scroll as u16, 0))
         };
         frame.render_widget(paragraph, layout[1]);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             layout[1],
-            &mut state.log_scroll_state
+            &mut state.log_scroll_state,
         );
     }
     {
@@ -153,7 +160,7 @@ pub async fn run(endpoint: String) {
     let mut state = State {
         endpoint: &endpoint,
         log_scroll_state: Default::default(),
-        log_scroll: 0
+        log_scroll: 0,
     };
     let mut rendered_state = RenderedState::default();
 
@@ -168,7 +175,9 @@ pub async fn run(endpoint: String) {
     let mut exit_btn_hold = false;
     let notify = TUI_NOTIFY.clone();
     loop {
-        use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
+        use crossterm::event::{
+            self, Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind,
+        };
 
         terminal
             .draw(|f| render(f, &mut state, &mut rendered_state))
@@ -180,7 +189,7 @@ pub async fn run(endpoint: String) {
                     return event::read();
                 } else {
                     // no term event yet, see if other things need a update.
- 
+
                     // finder countdown updating
                     if !*TUI_FOUND_CM.lock().unwrap() {
                         notify.notify_one();
@@ -242,5 +251,6 @@ pub async fn run(endpoint: String) {
             _ = notify.notified() => {}
         };
     }
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
 }

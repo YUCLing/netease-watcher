@@ -1,6 +1,6 @@
 [package]
 name = "netease-watcher"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2021"
 
 [features]
@@ -25,7 +25,7 @@ tokio = { version = "1.47.1", features = ["full"] }
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.61"
 features = [
     "Win32_Foundation",
@@ -41,3 +41,8 @@ features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging"
 ]
+
+[target.'cfg(unix)'.dependencies]
+procfs = "0.18.0"
+nix = { version = "0.31.1", features = ["uio", "process", "ptrace"] }
+notify = "8.2.0"

@@ -4,12 +4,15 @@ use serde::Serialize;
 use tokio::sync::watch::{self, Receiver};
 
 mod logging;
+#[cfg(unix)]
+mod mem;
 mod netease;
+#[cfg(windows)]
 mod process;
+mod server;
 #[cfg(feature = "tui")]
 mod tui;
 mod util;
-mod server;
 
 #[derive(Clone, Serialize, PartialEq, Debug)]
 pub struct Music {
@@ -59,9 +62,7 @@ async fn main() {
             .with_state(State(time_rx, music_rx));
 
         log::info!("Starting HTTP server at {}", endpoint);
-        let listener = tokio::net::TcpListener::bind(&endpoint)
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind(&endpoint).await.unwrap();
 
         #[cfg(feature = "tui")]
         tokio::spawn(async { axum::serve(listener, app).await.unwrap() });
