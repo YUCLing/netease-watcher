@@ -3,15 +3,14 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    response::IntoResponse, Json,
+    response::IntoResponse,
+    Json,
 };
 use tokio::sync::watch::Receiver;
 
 use crate::Music;
 
-pub async fn http_handler(
-    State(state): State<crate::State>,
-) -> impl IntoResponse {
+pub async fn http_handler(State(state): State<crate::State>) -> impl IntoResponse {
     let crate::State(time_rx, music_rx) = state.clone();
     let current_time = *time_rx.borrow();
     let current_music = music_rx.borrow().clone();

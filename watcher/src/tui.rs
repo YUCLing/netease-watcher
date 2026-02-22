@@ -23,8 +23,8 @@ lazy_static! {
     pub static ref TUI_NOTIFY: Arc<Notify> = Arc::new(Notify::new());
     pub static ref TUI_MUSIC: Arc<Mutex<Option<Music>>> = Arc::new(Mutex::new(None));
     pub static ref TUI_MUSIC_TIME: Arc<Mutex<f64>> = Arc::new(Mutex::new(0.));
-    pub static ref TUI_FOUND_CM: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
-    pub static ref TUI_LAST_FIND_TIME: Arc<Mutex<Instant>> = Arc::new(Mutex::new(Instant::now()));
+    pub static ref TUI_NEXT_FIND_TIME: Arc<Mutex<Option<Instant>>> =
+        Arc::new(Mutex::new(Some(Instant::now())));
 }
 
 struct State<'a> {
@@ -191,7 +191,7 @@ pub async fn run(endpoint: String) {
                     // no term event yet, see if other things need a update.
 
                     // finder countdown updating
-                    if !*TUI_FOUND_CM.lock().unwrap() {
+                    if TUI_NEXT_FIND_TIME.lock().unwrap().is_some() {
                         notify.notify_one();
                     }
 

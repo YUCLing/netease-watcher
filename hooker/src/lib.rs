@@ -3,19 +3,24 @@
 use core::ffi::c_void;
 
 use lazy_static::lazy_static;
-use windows_sys::{core::BOOL, Win32::{
-    Foundation::{HINSTANCE, LPARAM, LRESULT, RECT, WPARAM},
-    System::SystemServices::DLL_PROCESS_DETACH,
-    UI::WindowsAndMessaging::{
-        CallNextHookEx, GetWindowRect, IsIconic, IsWindow, IsZoomed, SendMessageW, SetWindowPos, ShowWindow, HCBT_ACTIVATE, HCBT_MINMAX, HWND_BOTTOM, HWND_TOP, SET_WINDOW_POS_FLAGS, SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOREDRAW, SWP_NOREPOSITION, SW_FORCEMINIMIZE, SW_MAXIMIZE, SW_MINIMIZE, SW_NORMAL, SW_SHOWMINIMIZED, WM_SIZE
+use windows_sys::{
+    core::BOOL,
+    Win32::{
+        Foundation::{HINSTANCE, LPARAM, LRESULT, RECT, WPARAM},
+        System::SystemServices::DLL_PROCESS_DETACH,
+        UI::WindowsAndMessaging::{
+            CallNextHookEx, GetWindowRect, IsIconic, IsWindow, IsZoomed, SendMessageW,
+            SetWindowPos, ShowWindow, HCBT_ACTIVATE, HCBT_MINMAX, HWND_BOTTOM, HWND_TOP,
+            SET_WINDOW_POS_FLAGS, SIZE_RESTORED, SWP_NOACTIVATE, SWP_NOREDRAW, SWP_NOREPOSITION,
+            SW_FORCEMINIMIZE, SW_MAXIMIZE, SW_MINIMIZE, SW_NORMAL, SW_SHOWMINIMIZED, WM_SIZE,
+        },
     },
-}};
+};
 
 mod window;
 
 lazy_static! {
     static ref LAST_HWND: spin::Mutex<Option<usize>> = spin::Mutex::new(None);
-
     static ref MAXMIZED: spin::Mutex<bool> = spin::Mutex::new(false);
     static ref WND_POS: spin::Mutex<Option<WindowPos>> = spin::Mutex::new(None);
 }
@@ -121,7 +126,7 @@ extern "C" fn CBTProc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
             }
         }
     } else if hcbt == HCBT_ACTIVATE {
-        restore_window(wparam as *mut c_void, true,0);
+        restore_window(wparam as *mut c_void, true, 0);
     }
     unsafe { CallNextHookEx(core::ptr::null_mut(), ncode, wparam, lparam) }
 }

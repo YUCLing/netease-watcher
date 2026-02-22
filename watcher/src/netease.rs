@@ -1,3 +1,9 @@
+#[cfg(unix)]
+mod unix;
+
+#[cfg(unix)]
+pub use unix::NeteaseWatcherUnix as NeteaseWatcher;
+
 use std::time::Duration;
 #[cfg(windows)]
 use std::{ffi::c_void, mem::size_of, path::Path, time::Instant};
@@ -201,108 +207,7 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
                     }
                 }
             }
-            #[cfg(unix)]
-            'find_netease: {
-                let Ok(processes) = procfs::process::all_processes() else {
-                    break 'find_netease;
-                };
-                for process in processes {
-                    let Ok(process) = process else {
-                        continue;
-                    };
-                    let Ok(cmdline) = process.cmdline() else {
-                        continue;
-                    };
-                    let Some(executable) = cmdline.first() else {
-                        continue;
-                    };
-                    if !executable.ends_with("cloudmusic.exe")
-                        || cmdline.iter().any(|x| x.contains("--type"))
-                    {
-                        continue;
-                    }
-                    log::info!(
-                        "Found Netease Cloud Music process: {} (pid {})",
-                        executable,
-                        process.pid
-                    );
-                    let Ok(maps) = process.maps() else {
-                        log::warn!(
-                            "Unable to read memory maps of the process {}, skipping.",
-                            process.pid
-                        );
-                        continue;
-                    };
-                    let mut in_cloudmusic_map = false;
-                    'maps: for map in maps {
-                        use procfs::process::{MMPermissions, MMapPath};
 
-                        match &map.pathname {
-                            MMapPath::Path(p) => {
-                                let filename = p.file_name().unwrap_or_default();
-                                if filename == "cloudmusic.dll" {
-                                    in_cloudmusic_map = true;
-                                } else {
-                                    in_cloudmusic_map = false;
-                                }
-                            }
-                            MMapPath::Anonymous => {}
-                            _ => {
-                                in_cloudmusic_map = false;
-                                continue;
-                            }
-                        }
-
-                        if !in_cloudmusic_map {
-                            continue;
-                        }
-
-                        if map.perms.contains(MMPermissions::EXECUTE) {
-                            let Some(addr) = util::find_movsd_instructions(process.pid, &map)
-                            else {
-                                continue;
-                            };
-
-                            // found addr of the play progress
-                            #[cfg(feature = "tui")]
-                            {
-                                *crate::tui::TUI_FOUND_CM.lock().unwrap() = true;
-                            }
-
-                            // TODO: how do we setup CBTProc hook from outside of Wine?
-
-                            let mut last_val = -1.;
-                            loop {
-                                let val = util::read_double_from_addr(process.pid, addr);
-                                if val < 0. {
-                                    // unable to read properly
-                                    continue 'maps; // keep trying other maps
-                                }
-                                if val != last_val {
-                                    #[cfg(feature = "tui")]
-                                    {
-                                        let mut lck = crate::tui::TUI_MUSIC_TIME.lock().unwrap();
-                                        if lck.round() != val.round() {
-                                            // reducing the freq of update
-                                            *lck = val;
-                                            crate::tui::TUI_NOTIFY.notify_one();
-                                        }
-                                    }
-                                    if current_time.send(val).is_ok() {
-                                        last_val = val;
-                                    }
-                                }
-                                std::thread::sleep(Duration::from_millis(50));
-                            }
-                        }
-                    }
-                }
-            }
-            #[cfg(feature = "tui")]
-            {
-                *crate::tui::TUI_FOUND_CM.lock().unwrap() = false;
-                *crate::tui::TUI_LAST_FIND_TIME.lock().unwrap() = std::time::Instant::now();
-            }
             #[cfg(not(feature = "tui"))]
             log::info!(
                 "Unable to find/open Netease Cloud Music process. Next try in {} secs.",
@@ -312,79 +217,6 @@ pub fn current_time_monitor(current_time: Sender<f64>) {
             std::thread::sleep(Duration::from_secs(FIND_RETRY_SECS));
         }
     });
-}
-
-fn update_music(conn: &Connection, music: &Sender<Option<Music>>) {
-    let json_str: String = {
-        let Ok(json_str) = conn.query_row(
-            "SELECT jsonStr FROM historyTracks ORDER BY playtime DESC LIMIT 1",
-            [],
-            |row| row.get(0),
-        ) else {
-            log::error!("Unable to read the database.");
-            return;
-        };
-        json_str
-    };
-
-    let json = serde_json::from_str::<Value>(&json_str);
-    let new_val = json.ok().map(|x| {
-        let album = x.get("album").unwrap();
-        let album_name = album.get("name").unwrap().as_str().unwrap().to_string();
-        let thumbnail = album.get("picUrl").unwrap().as_str().unwrap().to_string();
-        let artists = x.get("artists").unwrap().as_array().unwrap();
-        let mut artists_vec = Vec::with_capacity(artists.len());
-        for i in artists {
-            artists_vec.push(i.get("name").unwrap().as_str().unwrap().to_string());
-        }
-        let duration = x.get("duration").unwrap().as_i64().unwrap();
-        let name = x.get("name").unwrap().as_str().unwrap().to_string();
-        let id = x.get("id").unwrap().as_str().unwrap().parse().unwrap_or(0);
-        Music {
-            album: album_name,
-            aliases: x
-                .get("alias")
-                .map(|x| {
-                    x.as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|x| x.as_str().unwrap().to_string())
-                        .collect()
-                })
-                .and_then(|x: Vec<String>| if x.is_empty() { None } else { Some(x) }),
-            thumbnail,
-            artists: artists_vec,
-            id,
-            duration,
-            name,
-        }
-    });
-    if new_val != *music.borrow() {
-        log::info!(
-            "Music changed to {}",
-            if let Some(music) = new_val.as_ref() {
-                format!(
-                    "{}{} - {} ({})",
-                    music.name,
-                    if music.aliases.is_none() {
-                        "".to_string()
-                    } else {
-                        format!(" [{}]", music.aliases.as_ref().unwrap().join("/"))
-                    },
-                    music.artists.join(", "),
-                    music.id
-                )
-            } else {
-                "*no music*".to_string()
-            }
-        );
-        #[cfg(feature = "tui")]
-        {
-            *crate::tui::TUI_MUSIC.lock().unwrap() = new_val.clone();
-            crate::tui::TUI_NOTIFY.notify_one();
-        }
-        let _ = music.send(new_val);
-    }
 }
 
 #[cfg(windows)]
@@ -460,110 +292,6 @@ pub fn music_monitor(music: Sender<Option<Music>>) {
                         break;
                     } else {
                         buffer = &buffer[next_entry_offset as usize / size_of::<u32>()..];
-                    }
-                }
-            }
-        }
-    });
-}
-
-#[cfg(unix)]
-pub fn music_monitor(music: Sender<Option<Music>>) {
-    let mut initial = true;
-    std::thread::spawn(move || loop {
-        if initial {
-            initial = false;
-        } else {
-            std::thread::sleep(Duration::from_secs(FIND_RETRY_SECS));
-        }
-        let Ok(processes) = procfs::process::all_processes() else {
-            continue;
-        };
-        for process in processes {
-            let Ok(process) = process else {
-                continue;
-            };
-            let Ok(cmdline) = process.cmdline() else {
-                continue;
-            };
-            let Some(executable) = cmdline.first() else {
-                continue;
-            };
-            if !executable.ends_with("cloudmusic.exe")
-                || cmdline.iter().any(|x| x.contains("--type"))
-            {
-                continue;
-            }
-            let Some((pfx, user)) = process.environ().ok().and_then(|x| {
-                use std::ffi::OsStr;
-
-                let Some(pfx) = x.get(OsStr::new("WINEPREFIX")) else {
-                    return None;
-                };
-
-                let Some(user) = x.get(OsStr::new("USER")) else {
-                    return None;
-                };
-
-                Some((
-                    pfx.to_string_lossy().to_string(),
-                    user.to_string_lossy().to_string(),
-                ))
-            }) else {
-                continue;
-            };
-
-            let netease_webdb_file = format!(
-                "{}/drive_c/users/{}/AppData/Local/NetEase/CloudMusic/Library/webdb.dat",
-                pfx, user
-            );
-            if let Ok(conn) = Connection::open(&netease_webdb_file) {
-                use std::sync::mpsc;
-
-                use notify::{Config, Watcher};
-
-                // initial update
-                update_music(&conn, &music);
-
-                log::info!("Found Netease Cloud Music database file.");
-                let (tx, rx) = mpsc::channel();
-
-                let Ok(mut watcher) = notify::recommended_watcher(tx) else {
-                    log::error!("Failed to create file watcher.");
-                    continue;
-                };
-
-                if let Err(_) =
-                    watcher.configure(Config::default().with_poll_interval(Duration::from_secs(1)))
-                {
-                    continue;
-                }
-
-                if let Err(_) = watcher.watch(
-                    netease_webdb_file.as_ref(),
-                    notify::RecursiveMode::NonRecursive,
-                ) {
-                    log::error!("Failed to watch the database file.");
-                    continue;
-                }
-
-                loop {
-                    match rx.recv_timeout(Duration::from_secs(FIND_RETRY_SECS)) {
-                        Ok(e) => match e {
-                            Ok(ev) => {
-                                if ev.kind.is_modify() {
-                                    update_music(&conn, &music);
-                                }
-                            }
-                            Err(err) => {
-                                log::error!("File watch error: {}", err);
-                            }
-                        },
-                        _ => {}
-                    }
-
-                    if !process.is_alive() {
-                        break;
                     }
                 }
             }
