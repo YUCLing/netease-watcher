@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["watcher", "hooker"]
+members = ["watcher", "hook", "hooker"]
 default-members = ["watcher"]
 
 [workspace.dependencies]

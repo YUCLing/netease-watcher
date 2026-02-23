@@ -7,10 +7,10 @@ fn main() {
     let mut crates_to_build: Vec<(String, String)> = Vec::new();
 
     // Always build the wndhok
-    crates_to_build.push(("wndhok".to_string(), "hooker".to_string()));
+    crates_to_build.push(("wndhok".to_string(), "hook".to_string()));
 
     if cfg!(unix) {
-        // On Unix, we will need to build the helper program to set up CBT hooks in Wine.
+        crates_to_build.push(("winehooker".to_string(), "hooker".to_string()));
     }
 
     let out_dir_str = env::var("OUT_DIR").unwrap();

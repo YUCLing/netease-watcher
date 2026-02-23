@@ -1,5 +1,11 @@
+use std::{
+    collections::HashMap,
+    hash::RandomState,
+    process::{Child, Command, Stdio},
+};
+
 use lightningscanner::Scanner;
-use procfs::process::MemoryMap;
+use procfs::process::{MemoryMap, Process};
 
 use crate::{
     netease::unix::mem,
@@ -56,4 +62,35 @@ pub fn read_double_from_addr(pid: i32, addr: usize) -> f64 {
     } else {
         val
     }
+}
+
+pub fn run_executable_in_same_wine<S: AsRef<str>>(
+    proc: &Process,
+    executable: S,
+) -> Result<Command, String> {
+    let Ok(env_vars) = proc.environ().map(|x| {
+        HashMap::<String, String, RandomState>::from_iter(x.iter().filter_map(|x| {
+            let Some(key) = x.0.to_str() else {
+                return None;
+            };
+            let Some(value) = x.1.to_str() else {
+                return None;
+            };
+            Some((key.to_string(), value.to_string()))
+        }))
+    }) else {
+        return Err("Unable to read environment variables of the process.".to_string());
+    };
+
+    let Some(loader) = env_vars.get("WINELOADER").cloned() else {
+        return Err("Unable to determine the loader used by the process.".to_string());
+    };
+
+    let mut command = Command::new(loader);
+    command.arg(executable.as_ref());
+    for (key, value) in env_vars {
+        command.env(key, value);
+    }
+
+    Ok(command)
 }

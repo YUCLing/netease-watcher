@@ -1,20 +1,21 @@
 [package]
-name = "wndhok"
-version = "0.1.1"
-edition = "2021"
+name = "winehooker"
+version = "0.1.0"
+edition = "2024"
 
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-lazy_static.workspace = true
-smallvec = "1.15.1"
-spin = "0.10.0"
-
-[dependencies.windows-sys]
-version = "0.60"
+[dependencies.windows]
+version = "0.62"
 features = [
     "Win32_Foundation",
-    "Win32_System_SystemServices",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging"
 ]

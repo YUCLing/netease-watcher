@@ -169,12 +169,31 @@ impl NeteaseWatcherUnix {
                             continue;
                         };
 
-                        // TODO: how do we setup CBTProc hook from outside of Wine?
-                        // run a helper program in the wine to hook?
+                        if let Ok(helper) = std::env::current_exe().and_then(|mut x| {
+                            x.pop(); // remove the executable name
+                            x.push("winehooker.exe");
+                            if !x.exists() {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::NotFound,
+                                    "winehooker.exe not found".to_string(),
+                                ));
+                            }
+                            Ok(x)
+                        }) {
+                            if let Ok(mut cmd) = util::run_executable_in_same_wine(
+                                &process,
+                                helper.to_string_lossy().to_string(),
+                            ) {
+                                //cmd.spawn();
+                            }
+                        } else {
+                            log::error!("Failed to get hooker executable.");
+                        }
 
                         let mut last_val = -1.;
                         loop {
                             if stop_rx.try_recv().is_ok() {
+                                // TODO: cleanup the hooker process
                                 break 'watcher_loop;
                             }
 
