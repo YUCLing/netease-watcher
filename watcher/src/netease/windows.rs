@@ -263,6 +263,9 @@ impl NeteaseWatcherWindows {
                     }
                 }
             }
+            // reset states
+            time_tx.send(-1.).unwrap();
+            music_tx.send(None).unwrap();
             scheduled_find_time_tx
                 .send(Some(Instant::now() + Duration::from_secs(FIND_RETRY_SECS)))
                 .unwrap();
