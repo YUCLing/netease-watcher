@@ -28,8 +28,8 @@ use windows::{
 
 use crate::{
     netease::{
-        create_file_watcher, update_music, windows::process::get_process_thread_ids,
-        FIND_RETRY_SECS,
+        create_file_watcher, stoppable_sleep, update_music,
+        windows::process::get_process_thread_ids, FIND_RETRY_SECS,
     },
     Music,
 };
@@ -84,6 +84,7 @@ impl NeteaseWatcherWindows {
         let scheduled_find_time_tx = self.scheduled_find_time.0.clone();
         scheduled_find_time_tx.send(Some(Instant::now())).unwrap();
         let netease_webdb_file = self.webdb_file.clone();
+        let sleep_duration = Duration::from_secs(FIND_RETRY_SECS);
         let join_handle = std::thread::spawn(move || 'watcher_loop: loop {
             if stop_rx.try_recv().is_ok() {
                 break 'watcher_loop;
@@ -267,9 +268,11 @@ impl NeteaseWatcherWindows {
             time_tx.send(-1.).unwrap();
             music_tx.send(None).unwrap();
             scheduled_find_time_tx
-                .send(Some(Instant::now() + Duration::from_secs(FIND_RETRY_SECS)))
+                .send(Some(Instant::now() + sleep_duration))
                 .unwrap();
-            std::thread::sleep(Duration::from_secs(FIND_RETRY_SECS));
+            if stoppable_sleep(sleep_duration, &mut stop_rx) {
+                break 'watcher_loop;
+            }
         });
         self.watch_thread = Some((stop_signal, join_handle));
     }

@@ -12,7 +12,7 @@ mod windows;
 
 use rusqlite::Connection;
 use serde_json::Value;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 #[cfg(windows)]
 pub use windows::NeteaseWatcherWindows as NeteaseWatcher;
 
@@ -109,6 +109,19 @@ pub(self) fn update_music(conn: &Connection, music: &watch::Sender<Option<Music>
         );
         let _ = music.send(new_val);
     }
+}
+
+pub(self) fn stoppable_sleep(duration: Duration, stop_signal: &mut oneshot::Receiver<()>) -> bool {
+    let sleep_interval = Duration::from_millis(100);
+    let mut elapsed = Duration::ZERO;
+    while elapsed < duration {
+        if stop_signal.try_recv().is_ok() {
+            return true;
+        }
+        std::thread::sleep(sleep_interval);
+        elapsed += sleep_interval;
+    }
+    false
 }
 
 impl NeteaseWatcher {
