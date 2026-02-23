@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["watcher", "hooker"]
+default-members = ["watcher"]
 
 [workspace.dependencies]
 lazy_static = "1.5.0"
