@@ -1,16 +1,12 @@
-use std::sync::Arc;
-
 use axum::{routing::get, Router};
 use logging::{setup_logger, setup_panic_logger_hook};
 use serde::Serialize;
-use tokio::sync::watch::{self, Receiver};
+use tokio::sync::watch;
 
 use crate::netease::NeteaseWatcher;
 
 mod logging;
 mod netease;
-#[cfg(windows)]
-mod process;
 mod server;
 #[cfg(feature = "tui")]
 mod tui;
@@ -28,7 +24,7 @@ pub struct Music {
 }
 
 #[derive(Clone)]
-pub struct State(Receiver<f64>, Receiver<Option<Music>>);
+pub struct State(watch::Receiver<f64>, watch::Receiver<Option<Music>>);
 
 #[tokio::main]
 async fn main() {
@@ -79,7 +75,12 @@ async fn main() {
                         crate::tui::TUI_NOTIFY.notify_one();
                     }
                     _ = next_find_time_rx.changed() => {
-                        *crate::tui::TUI_NEXT_FIND_TIME.lock().unwrap() = next_find_time_rx.borrow().clone();
+                        let next_find_time = next_find_time_rx.borrow().clone();
+                        if next_find_time.is_some() {
+                            // process is gone, clear music info
+                            *crate::tui::TUI_MUSIC.lock().unwrap() = None;
+                        }
+                        *crate::tui::TUI_NEXT_FIND_TIME.lock().unwrap() = next_find_time;
                         crate::tui::TUI_NOTIFY.notify_one();
                     }
                 }

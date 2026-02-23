@@ -1,10 +1,9 @@
 use std::{
-    any::Any,
-    sync::mpsc,
+    path::Path,
     time::{Duration, Instant},
 };
 
-use notify::{Config, EventKind, Watcher};
+use notify::EventKind;
 use rusqlite::Connection;
 use tokio::sync::{
     oneshot,
@@ -12,8 +11,9 @@ use tokio::sync::{
 };
 
 use crate::{
-    netease::{unix::util::determine_is_64_bit, FIND_RETRY_SECS},
-    util::update_music,
+    netease::{
+        create_file_watcher, unix::util::determine_is_64_bit, update_music, FIND_RETRY_SECS,
+    },
     Music,
 };
 
@@ -21,10 +21,10 @@ mod mem;
 mod util;
 
 pub struct NeteaseWatcherUnix {
-    time: (Sender<f64>, Receiver<f64>),
-    music: (Sender<Option<Music>>, Receiver<Option<Music>>),
-    scheduled_find_time: (Sender<Option<Instant>>, Receiver<Option<Instant>>),
-    watch_thread: Option<(oneshot::Sender<()>, std::thread::JoinHandle<()>)>,
+    pub(super) time: (Sender<f64>, Receiver<f64>),
+    pub(super) music: (Sender<Option<Music>>, Receiver<Option<Music>>),
+    pub(super) scheduled_find_time: (Sender<Option<Instant>>, Receiver<Option<Instant>>),
+    pub(super) watch_thread: Option<(oneshot::Sender<()>, std::thread::JoinHandle<()>)>,
 }
 
 impl NeteaseWatcherUnix {
@@ -160,26 +160,12 @@ impl NeteaseWatcherUnix {
                         // initial update
                         update_music(&conn, &music_tx);
 
-                        let (tx, rx) = mpsc::channel();
-
-                        let Ok(mut watcher) = notify::recommended_watcher(tx) else {
+                        let Ok((_watcher, notify_rx)) =
+                            create_file_watcher(Path::new(&netease_webdb_file))
+                        else {
                             log::error!("Failed to create file watcher.");
                             continue;
                         };
-
-                        if let Err(_) = watcher
-                            .configure(Config::default().with_poll_interval(Duration::from_secs(1)))
-                        {
-                            continue;
-                        }
-
-                        if let Err(_) = watcher.watch(
-                            netease_webdb_file.as_ref(),
-                            notify::RecursiveMode::NonRecursive,
-                        ) {
-                            log::error!("Failed to watch the database file.");
-                            continue;
-                        }
 
                         // TODO: how do we setup CBTProc hook from outside of Wine?
                         // run a helper program in the wine to hook?
@@ -187,7 +173,6 @@ impl NeteaseWatcherUnix {
                         let mut last_val = -1.;
                         loop {
                             if stop_rx.try_recv().is_ok() {
-                                log::info!("Stopping watcher thread.");
                                 break 'watcher_loop;
                             }
 
@@ -202,7 +187,7 @@ impl NeteaseWatcherUnix {
                                 }
                             }
 
-                            if let Ok(Ok(e)) = rx.try_recv() {
+                            if let Ok(Ok(e)) = notify_rx.try_recv() {
                                 if matches!(e.kind, EventKind::Modify(_)) {
                                     update_music(&conn, &music_tx);
                                 }
@@ -219,29 +204,5 @@ impl NeteaseWatcherUnix {
             std::thread::sleep(Duration::from_secs(FIND_RETRY_SECS));
         });
         self.watch_thread = Some((stop_signal, join_handle));
-    }
-
-    pub async fn stop(&mut self) -> Result<(), Box<dyn Any + Send>> {
-        let Some((stop_signal, join_handle)) = self.watch_thread.take() else {
-            return Ok(());
-        };
-
-        if stop_signal.send(()).is_err() {
-            return Ok(());
-        }
-
-        join_handle.join()
-    }
-
-    pub fn time(&self) -> Receiver<f64> {
-        self.time.1.clone()
-    }
-
-    pub fn music(&self) -> Receiver<Option<Music>> {
-        self.music.1.clone()
-    }
-
-    pub fn next_find_time(&self) -> Receiver<Option<Instant>> {
-        self.scheduled_find_time.1.clone()
     }
 }
